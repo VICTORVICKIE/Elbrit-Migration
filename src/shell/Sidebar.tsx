@@ -131,6 +131,18 @@ export function Sidebar() {
           <Item key={i.to} {...i} collapsed={collapsed} />
         ))}
 
+        {/* Plain <a>, not next/link — this app's basePath ('/migration') would
+            otherwise prefix href="/" back into this app instead of the root
+            playground app. */}
+        <a
+          href="/"
+          className="mb-0.5 flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-medium text-sidebar-text hover:bg-white/5 hover:text-[#d7dee8]"
+          title={collapsed ? 'Back to Playground' : undefined}
+        >
+          <span className="w-4 text-center text-[13px]">⌂</span>
+          {!collapsed && <span>Playground</span>}
+        </a>
+
         <div className="mt-auto flex items-center gap-1.5 pt-3 px-2.5 text-[11.5px] text-sidebar-heading">
           <span className="size-1.5 rounded-full bg-[#22c55e]" />
           {!collapsed && 'Firebase · connected'}
