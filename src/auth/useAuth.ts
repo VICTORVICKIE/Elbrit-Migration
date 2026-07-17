@@ -9,10 +9,11 @@ export interface AuthState {
   user: User | null
 }
 
-// Sign-in happens on netstar's own /login page. Because this app is served
-// from the same origin (Multi-Zones) and the same Firebase project, a
-// session started there is already visible here via onAuthStateChanged —
-// no sign-in UI or duplicate auth flow needed in this zone.
+// Sign-in happens on the main app's /login page (separate domain since the
+// multi-zone split). Both apps share the same Firebase project and
+// `authDomain`, so Firebase Auth's cross-origin session sync (via that
+// authDomain's iframe) makes a session started there visible here too via
+// onAuthStateChanged — no sign-in UI or duplicate auth flow needed in this app.
 export function useAuth(): AuthState {
   const [state, setState] = useState<AuthState>({ loading: true, user: null })
 
