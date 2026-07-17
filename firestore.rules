@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Allow public read access to DevOps/Setting document
+    match /DevOps/Setting {
+      allow read: if true;
+      allow write: if request.auth != null && (
+        request.auth.token.firebase.sign_in_provider == "phone" ||
+        (
+          request.auth.token.firebase.sign_in_provider == "google.com" &&
+          request.auth.token.email != null &&
+          request.auth.token.email_verified == true &&
+          request.auth.token.email.matches('.*@elbrit\\.org$')
+        )
+      );
+    }
+
+    // gql (saved query library) — public, no auth (loaded before/without login)
+    match /gql/{document=**} {
+      allow read, write: if true;
+    }
+
+    match /tokens/{document=**} {
+      allow read, write: if true;
+    }
+    match /users/{document=**} {
+      allow read, write: if true;
+    }
+    match /reports/{document=**} {
+      allow read, write: if true;
+    }
+    match /logs/{document=**} {
+      allow read, write: if true;
+    }
+
+    // TEMPORARY — storage→firestore import. DELETE THIS BLOCK after running.
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // --- Elbrit Data Migration app (netstar/apps/migration) ---
+    // Everything lives under one "migration" collection; only the
+    // credentials doc is admin-gated, everything else just needs sign-in.
+    match /migration/secrets {
+      allow read, write: if isAdmin();
+    }
+    match /migration/{document=**} {
+      allow read, write: if isSignedIn() && document[0] != 'secrets';
+    }
+
+    // Default rules for all other documents
+    match /{document=**} {
+      allow read, write: if request.auth != null && (
+        request.auth.token.firebase.sign_in_provider == "phone" ||
+        (
+          request.auth.token.firebase.sign_in_provider == "google.com" &&
+          request.auth.token.email != null &&
+          request.auth.token.email_verified == true &&
+          request.auth.token.email.matches('.*@elbrit\\.org$')
+        )
+      );
+    }
+  }
+}

@@ -1,0 +1,169 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Accent — user-tweakable at runtime (Settings → Appearance writes --color-accent inline) */
+  --color-accent: #1e40af;
+  --color-accent-soft: #eff4ff;
+  --color-accent-text: #1e40af;
+
+  /* Surfaces */
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-border: #e5e8ec;
+  --color-border-strong: #d2d7dd;
+
+  /* Sidebar */
+  --color-sidebar-bg: #101b2d;
+  --color-sidebar-text: #8fa0b5;
+  --color-sidebar-heading: #5c6e85;
+  --color-sidebar-active-bg: #1d2b42;
+  --color-sidebar-active-text: #ffffff;
+
+  /* Text */
+  --color-text: #17202b;
+  --color-text-muted: #5f6b7a;
+  --color-text-faint: #97a2b0;
+
+  /* Row / batch status colors */
+  --color-status-new: #2563eb;
+  --color-status-new-bg: #eff4ff;
+  --color-status-matched: #7c3aed;
+  --color-status-matched-bg: #f3efff;
+  --color-status-error: #dc2626;
+  --color-status-error-bg: #fdeeee;
+  --color-status-conflict: #d97706;
+  --color-status-conflict-bg: #fdf3e3;
+  --color-status-synced: #15803d;
+  --color-status-synced-bg: #e9f7ee;
+  --color-status-skipped: #64748b;
+  --color-status-skipped-bg: #eef1f5;
+
+  --color-active-badge: #15803d;
+  --color-active-badge-bg: #dcf5e4;
+
+  /* Type */
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+:root {
+  /* Density (swapped by [data-density]) */
+  --row-height: 44px;
+  --cell-pad-y: 12px;
+  --cell-pad-x: 14px;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow-card: 0 1px 2px rgba(16, 27, 45, 0.05);
+  --shadow-panel: 0 8px 30px rgba(16, 27, 45, 0.16);
+
+  --sidebar-width: 216px;
+  --sidebar-width-collapsed: 56px;
+}
+
+[data-density='compact'] {
+  --row-height: 32px;
+  --cell-pad-y: 6px;
+  --cell-pad-x: 10px;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    color: var(--color-text);
+    background: var(--color-bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+  }
+
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+    font-size: inherit;
+  }
+
+  a {
+    color: var(--color-accent-text);
+    text-decoration: none;
+  }
+
+  code,
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+}
+
+@layer components {
+  .table-data {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .table-data th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-faint);
+    padding: 8px var(--cell-pad-x);
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+  }
+  .table-data td {
+    padding: var(--cell-pad-y) var(--cell-pad-x);
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: middle;
+    height: var(--row-height);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .table-data tr:last-child td {
+    border-bottom: none;
+  }
+  .table-data tbody tr:nth-child(even) {
+    background: rgba(16, 27, 45, 0.025);
+  }
+  .table-data tbody tr.clickable:hover {
+    background: var(--color-bg);
+    cursor: pointer;
+  }
+  .table-data tbody tr.row-selected {
+    background: var(--color-accent-soft);
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
+  .table-scroll .table-data {
+    min-width: 960px;
+  }
+}
