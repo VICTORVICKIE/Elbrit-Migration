@@ -127,7 +127,7 @@ export function RowDetailPanel({
         {row.issues.some((i) => i.code === 'ITEM_UNMAPPED') && (
           <ButtonLink
             render={
-              <Link href={`/mappings?field=item&sheetValue=${encodeURIComponent(row.itemName)}`} /> as ReactElement
+              <Link href={`/mappings?tab=regex&pattern=${encodeURIComponent(row.itemName)}`} /> as ReactElement
             }
           >
             Map item in Mappings →
