@@ -69,6 +69,7 @@ function CustomerMappingTab() {
     [masterMap],
   )
   const scrollRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's returned functions are intentionally unmemoized
   const rowVirtualizer = useVirtualizer({
     count: customerMap.length,
     getScrollElement: () => scrollRef.current,

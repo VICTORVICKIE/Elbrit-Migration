@@ -199,6 +199,7 @@ export function SecondaryPage() {
   // Only the flat row view needs virtualization — grouped views are bounded
   // by distinct stockist/item count, far smaller than raw row count.
   const tableScrollRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's returned functions are intentionally unmemoized
   const rowVirtualizer = useVirtualizer({
     count: groupedVisible ? 0 : visible.length,
     getScrollElement: () => tableScrollRef.current,
