@@ -49,8 +49,6 @@ export function normalizeHeaderMap(headerMap: HeaderMapEntry[]): HeaderMapEntry[
 
 export const EMPTY_CREDENTIALS: Credentials = {
   erpnext: { baseUrl: '', apiKey: '', apiSecret: '' },
-  drive: { clientId: '', folderId: '' },
-  ecubix: { password: '' },
 }
 
 export const DEFAULT_PREFS: UserPrefs = {

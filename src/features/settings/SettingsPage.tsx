@@ -5,8 +5,6 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../data/appStore'
 import { ACCENT_CHOICES, FIXED_HEADER_FIELDS, normalizeHeaderMap } from '../../data/defaults'
-import { migrateLegacyBatchesOnce } from '../../data/migrateLegacyBatch'
-import { DriveClient } from '../../lib/drive/client'
 import type { HeaderMapEntry } from '../../types'
 import { DOCTYPE, erpClientFrom, fetchDocTypeFieldNames } from '../secondary/erpActions'
 import { Button } from '../../ui/Button'
@@ -16,6 +14,7 @@ import { cn } from '../../ui/cn'
 import { Field, Input } from '../../ui/Field'
 import { SearchableMultiSelect } from '../../ui/Combobox'
 import { SegmentedControl } from '../../ui/SegmentedControl'
+import { Spinner } from '../../ui/Spinner'
 import { Switch } from '../../ui/Switch'
 import { TabsList, TabsPanel, TabsRoot, TabsTab } from '../../ui/Tabs'
 import { Muted, PageHead, SectionLabel } from '../../ui/Text'
@@ -46,7 +45,8 @@ function MaskedInput({
   )
 }
 
-const TAB_VALUES = ['credentials', 'secondary', 'appearance', 'maintenance']
+const TAB_VALUES = ['credentials', 'configs', 'appearance']
+const CONFIG_TAB_VALUES = ['secondary', 'visit', 'service', 'support']
 
 export function SettingsPage() {
   const params = useSearchParams()
@@ -60,76 +60,58 @@ export function SettingsPage() {
 
       <TabsRoot value={tab} onValueChange={(v) => router.push(`${pathname}?tab=${v}`)}>
         <TabsList>
-          <TabsTab value="credentials">Keys &amp; credentials</TabsTab>
-          <TabsTab value="secondary">Secondary config</TabsTab>
+          <TabsTab value="credentials">Keys</TabsTab>
+          <TabsTab value="configs">Configs</TabsTab>
           <TabsTab value="appearance">Appearance</TabsTab>
-          <TabsTab value="maintenance">Maintenance</TabsTab>
         </TabsList>
 
         <TabsPanel value="credentials">
           <CredentialsTab />
         </TabsPanel>
-        <TabsPanel value="secondary">
-          <SecondaryConfigTab />
+        <TabsPanel value="configs">
+          <ConfigsTab />
         </TabsPanel>
         <TabsPanel value="appearance">
           <AppearanceTab />
         </TabsPanel>
-        <TabsPanel value="maintenance">
-          <MaintenanceTab />
-        </TabsPanel>
       </TabsRoot>
-
-      <div className="mt-5">
-        <SectionLabel>Coming soon</SectionLabel>
-        <Muted className="block text-[12.5px]">Visit · Service · Support configs unlock after Secondary is live.</Muted>
-      </div>
     </div>
   )
 }
 
-function MaintenanceTab() {
-  const [running, setRunning] = useState(false)
-  const [log, setLog] = useState<string[] | null>(null)
-  const loadAll = useAppStore((s) => s.loadAll)
-  const uid = useAppStore((s) => s.uid)
-
-  async function run() {
-    setRunning(true)
-    setLog([])
-    try {
-      await migrateLegacyBatchesOnce((line) => {
-        console.log('[migrateLegacyBatches]', line)
-        setLog((prev) => [...(prev ?? []), line])
-      })
-      await loadAll(uid) // refresh the store with the migrated data
-    } catch (e) {
-      console.error('[migrateLegacyBatches] failed', e)
-      setLog((prev) => [...(prev ?? []), `Failed: ${e instanceof Error ? e.message : String(e)}`])
-    } finally {
-      setRunning(false)
-    }
-  }
+function ConfigsTab() {
+  const [tab, setTab] = useState('secondary')
 
   return (
-    <Card className="max-w-160 p-4.5">
-      <h3 className="mb-2">One-time: migrate legacy batches</h3>
-      <Muted className="mb-3 block text-[12.5px]">
-        Moves batches from the old <span className="mono">migration/batches/entries/*</span> location to the
-        current <span className="mono">migration/data/batches/*</span> location, renaming each to the
-        <span className="mono"> batch-{'{department}'}-{'{hq}'}-{'{month}'}-{'{sheetId}'}</span> id format. Safe to
-        run more than once — it no-ops once nothing legacy is left.
-      </Muted>
-      <Button variant="primary" disabled={running} onClick={() => void run()}>
-        {running ? 'Migrating…' : 'Run migration'}
-      </Button>
-      {log && (
-        <pre className="mono mt-3 rounded-md border border-border bg-bg p-3 text-xs whitespace-pre-wrap break-words">
-          {log.join('\n')}
-        </pre>
-      )}
-    </Card>
+    <div>
+      <TabsRoot value={tab} onValueChange={setTab}>
+        <TabsList>
+          {CONFIG_TAB_VALUES.map((v) => (
+            <TabsTab key={v} value={v} disabled={v !== 'secondary'} className="capitalize disabled:opacity-50">
+              {v}
+            </TabsTab>
+          ))}
+        </TabsList>
+
+        <TabsPanel value="secondary">
+          <SecondaryConfigTab />
+        </TabsPanel>
+        <TabsPanel value="visit">
+          <ComingSoon name="Visit" />
+        </TabsPanel>
+        <TabsPanel value="service">
+          <ComingSoon name="Service" />
+        </TabsPanel>
+        <TabsPanel value="support">
+          <ComingSoon name="Support" />
+        </TabsPanel>
+      </TabsRoot>
+    </div>
   )
+}
+
+function ComingSoon({ name }: { name: string }) {
+  return <Muted className="block text-[12.5px]">{name} config unlocks after Secondary is live.</Muted>
 }
 
 function AppearanceTab() {
@@ -188,8 +170,6 @@ function CredentialsTab() {
   const [saving, setSaving] = useState(false)
   const [erpTest, setErpTest] = useState<string | null>(null)
   const [erpTesting, setErpTesting] = useState(false)
-  const [driveTest, setDriveTest] = useState<string | null>(null)
-  const [driveTesting, setDriveTesting] = useState(false)
 
   async function testErp() {
     setErpTesting(true)
@@ -205,28 +185,9 @@ function CredentialsTab() {
     setErpTesting(false)
   }
 
-  async function testDrive() {
-    setDriveTesting(true)
-    setDriveTest(null)
-    if (!draft.drive.clientId || !draft.drive.folderId) {
-      setDriveTest('Fill client ID and folder ID first.')
-      setDriveTesting(false)
-      return
-    }
-    try {
-      const client = new DriveClient(draft.drive.clientId)
-      const files = await client.listFolder(draft.drive.folderId)
-      setDriveTest(`✓ Folder reachable — ${files.length} spreadsheet(s) found.`)
-    } catch (e) {
-      setDriveTest('✗ ' + (e instanceof Error ? e.message : String(e)))
-    } finally {
-      setDriveTesting(false)
-    }
-  }
-
   return (
-    <div className="grid grid-cols-2 items-start gap-3.5">
-      <Card className="p-4.5">
+    <div className="grid items-start gap-3.5">
+      <Card className="max-w-105 p-4.5">
         <h3 className="mb-3">ERPNext</h3>
         <Field label="Base URL">
           <Input
@@ -253,35 +214,6 @@ function CredentialsTab() {
         {erpTest && <p className="mb-0 text-[12.5px]">{erpTest}</p>}
       </Card>
 
-      <Card className="p-4.5">
-        <h3 className="mb-3">Google Drive</h3>
-        <Field label="OAuth client ID">
-          <MaskedInput
-            value={draft.drive.clientId}
-            onChange={(v) => setDraft({ ...draft, drive: { ...draft.drive, clientId: v } })}
-            placeholder="....apps.googleusercontent.com"
-          />
-        </Field>
-        <Field label="Migration folder ID">
-          <Input
-            value={draft.drive.folderId}
-            onChange={(e) => setDraft({ ...draft, drive: { ...draft.drive, folderId: e.target.value } })}
-          />
-        </Field>
-        <Button size="sm" disabled={driveTesting} onClick={() => void testDrive()}>
-          {driveTesting ? 'Testing…' : 'Test connection'}
-        </Button>
-        {driveTest && <p className="mb-0 text-[12.5px]">{driveTest}</p>}
-
-        <h3 className="my-4.5">Ecubix</h3>
-        <Field label="Password (reference only)">
-          <MaskedInput
-            value={draft.ecubix.password}
-            onChange={(v) => setDraft({ ...draft, ecubix: { password: v } })}
-          />
-        </Field>
-      </Card>
-
       <div className="col-span-full flex items-center gap-2.5">
         <Button
           variant="primary"
@@ -294,7 +226,7 @@ function CredentialsTab() {
             setTimeout(() => setSaved(false), 2500)
           }}
         >
-          {saving ? 'Saving…' : 'Push to Firebase'}
+          {saving ? 'Saving…' : 'Save'}
         </Button>
         {saved && <span className="text-[12.5px] text-status-synced">Saved.</span>}
       </div>
@@ -353,6 +285,15 @@ function SecondaryConfigTab() {
 
   const labelByField = new Map(FIXED_HEADER_FIELDS.map((f) => [f.field, f.label]))
 
+  if (erpFieldsLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-15">
+        <Spinner className="h-6 w-6" />
+        <Muted className="text-[12.5px]">Loading {DOCTYPE} field options…</Muted>
+      </div>
+    )
+  }
+
   return (
     <div>
       <Card className="mb-3.5">
@@ -368,9 +309,6 @@ function SecondaryConfigTab() {
           <p className="px-4 pb-3 text-[12.5px] text-status-error">
             Could not load {DOCTYPE} fields from ERPNext: {erpFieldsError}
           </p>
-        )}
-        {erpFieldsLoading && (
-          <Muted className="block px-4 pb-3 text-[12.5px]">Loading {DOCTYPE} field options…</Muted>
         )}
         <div className="table-scroll">
           <table className="table-data">
@@ -428,7 +366,7 @@ function SecondaryConfigTab() {
             setTimeout(() => setSaved(false), 2500)
           }}
         >
-          {saving ? 'Saving…' : 'Push to Firebase'}
+          {saving ? 'Saving…' : 'Save'}
         </Button>
         {saved && <span className="text-[12.5px] text-status-synced">Saved.</span>}
       </div>

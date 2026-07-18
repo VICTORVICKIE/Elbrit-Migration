@@ -180,24 +180,12 @@ export interface CustomerProfile {
 
 export interface Credentials {
   erpnext: { baseUrl: string; apiKey: string; apiSecret: string }
-  drive: { clientId: string; folderId: string }
-  ecubix: { password: string }
 }
 
 export interface UserPrefs {
   accent: string
   density: 'comfortable' | 'compact'
   issueHints: boolean
-}
-
-export interface DriveFile {
-  id: string
-  name: string
-  modifiedTime: string
-  size: number | null
-  mimeType: string
-  /** Path of subfolder names (from the configured root, exclusive) this file was found under, if any. */
-  folderPath?: string
 }
 
 /** ERP "Secondary Data Entry" document shape (subset we care about). */

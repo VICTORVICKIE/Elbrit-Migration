@@ -3,7 +3,7 @@
 //
 // Everything lives under one top-level "migration" collection so this app
 // doesn't sprawl across netstar's shared Firestore namespace:
-//   migration/secrets                    — ERPNext/Drive/Ecubix credentials (admin-only)
+//   migration/secrets                    — ERPNext credentials (admin-only)
 //   migration/config                     — secondary-sheet parsing config
 //   migration/mapping/secondary/{id}      — sheet-value → ERP-value mappings (see MasterMapEntry)
 //   migration/mapping/regex/{id}          — regex → ERP-value overrides for Product master data (see RegexMapEntry)
