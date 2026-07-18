@@ -9,12 +9,12 @@ export function Switch({
   return (
     <BaseSwitch.Root
       className={cn(
-        'relative h-5 w-8.5 rounded-full bg-border-strong transition-colors data-[checked]:bg-accent',
+        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full bg-border-strong transition-colors data-[checked]:bg-status-synced',
         className,
       )}
       {...props}
     >
-      <BaseSwitch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white shadow transition-transform data-[checked]:translate-x-[18px]" />
+      <BaseSwitch.Thumb className="block size-3.5 translate-x-[3px] rounded-full bg-white shadow-sm transition-transform data-[checked]:translate-x-[19px]" />
     </BaseSwitch.Root>
   )
 }
