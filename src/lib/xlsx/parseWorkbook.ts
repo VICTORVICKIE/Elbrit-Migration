@@ -15,7 +15,7 @@ export interface ParseResult {
 }
 
 /** Subtotal/footer rows: "EBS626 Total", "Kurnool Total", "Grand Total". */
-function isSubtotalRow(raw: Record<string, string | number | null>): boolean {
+export function isSubtotalRow(raw: Record<string, string | number | null>): boolean {
   const cells = [raw['state'], raw['ebsCode'], raw['hq'], raw['customerName']]
   // Assumes one file covers a single month, so an empty/unmatched "Month"
   // column (which some sheet layouts omit entirely) can't be used as a
@@ -59,6 +59,55 @@ function coerce(value: unknown, type: HeaderMapEntry['type']): string | number |
     }
     default:
       return String(value).trim()
+  }
+}
+
+/**
+ * Build one MigrationRow from an already-coerced `raw` record (keyed by
+ * HeaderMapField). Shared by the grid-based xlsx parser below and the
+ * ecubix-Firestore row builder (src/features/secondary/ecubixBatch.ts) — the
+ * two differ only in how `raw`/`hq`/`date` are produced, not in the
+ * MigrationRow shape itself.
+ */
+export function buildMigrationRowFromRaw(
+  raw: Record<string, string | number | null>,
+  rowIndex: number,
+  opts: { hq: string; date: string },
+): MigrationRow {
+  const num = (f: string) => (typeof raw[f] === 'number' ? (raw[f] as number) : null)
+  return {
+    id: `row-${rowIndex}`,
+    rowIndex,
+    raw,
+    ebsCode: String(raw['ebsCode'] ?? '').trim(),
+    customerName: String(raw['customerName'] ?? '').trim(),
+    // Ecubix pads product names with trailing dots/spaces
+    itemName: String(raw['itemName'] ?? '').trim().replace(/[.\s]+$/, ''),
+    hq: opts.hq,
+    resolved: {
+      distributor: null,
+      item: null,
+      date: opts.date,
+      roleProfile: null,
+      department: null,
+      erpHq: null,
+    },
+    values: {
+      opening_qty: num('opening_qty'),
+      primary_sales: num('primary_sales'),
+      rate: num('rate'),
+      sales_qty: num('sales_qty'),
+      sales_value: num('sales_value'),
+      closing_qty: num('closing_qty'),
+      closing_balance: num('closing_balance'),
+    },
+    state: 'new',
+    issues: [],
+    diff: [],
+    erpDocName: null,
+    resolution: null,
+    push: { attempts: 0, lastError: null, lastAt: null },
+    validate: { ok: null, mismatches: [], at: null },
   }
 }
 
@@ -131,8 +180,6 @@ export function parseWorkbook(
       continue
     }
 
-    const num = (f: string) => (typeof raw[f] === 'number' ? (raw[f] as number) : null)
-
     const month = parseMonthCell(raw['month'])
     const state = String(raw['state'] ?? '').trim()
     const hq = String(raw['hq'] ?? '').trim()
@@ -140,40 +187,7 @@ export function parseWorkbook(
     if (month) months.add(month)
     if (hq) hqs.add(hq)
 
-    rows.push({
-      id: `row-${r + 1}`,
-      rowIndex: r + 1, // 1-based like Excel
-      raw,
-      ebsCode: String(raw['ebsCode'] ?? '').trim(),
-      customerName: String(raw['customerName'] ?? '').trim(),
-      // Ecubix pads product names with trailing dots/spaces
-      itemName: String(raw['itemName'] ?? '').trim().replace(/[.\s]+$/, ''),
-      hq,
-      resolved: {
-        distributor: null,
-        item: null,
-        date: month ? `${month}-01` : defaultDate,
-        roleProfile: null,
-        department: null,
-        erpHq: null,
-      },
-      values: {
-        opening_qty: num('opening_qty'),
-        primary_sales: num('primary_sales'),
-        rate: num('rate'),
-        sales_qty: num('sales_qty'),
-        sales_value: num('sales_value'),
-        closing_qty: num('closing_qty'),
-        closing_balance: num('closing_balance'),
-      },
-      state: 'new',
-      issues: [],
-      diff: [],
-      erpDocName: null,
-      resolution: null,
-      push: { attempts: 0, lastError: null, lastAt: null },
-      validate: { ok: null, mismatches: [], at: null },
-    })
+    rows.push(buildMigrationRowFromRaw(raw, r + 1, { hq, date: month ? `${month}-01` : defaultDate }))
   }
 
   return {

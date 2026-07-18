@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -9,8 +9,6 @@ import { StatusChip } from '../../components/StatusChip'
 import { buildMasterMap, useAppStore } from '../../data/appStore'
 import { normalizeItemName } from '../../engine/resolveItem'
 import { countRows, groupKey, validateRow } from '../../engine/validateRow'
-import { DriveClient } from '../../lib/drive/client'
-import { parseWorkbook } from '../../lib/xlsx/parseWorkbook'
 import type { MigrationRow, RowState } from '../../types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
@@ -20,6 +18,7 @@ import { cn } from '../../ui/cn'
 import { Spinner } from '../../ui/Spinner'
 import { Faint, Muted, PageHead, SectionLabel } from '../../ui/Text'
 import { SearchableSelect } from '../../ui/Combobox'
+import { StatTile } from '../../ui/StatTile'
 import { MapCustomerDialog } from './MapCustomerDialog'
 import { RowDetailPanel } from './RowDetailPanel'
 import {
@@ -32,7 +31,6 @@ import {
   type MasterMatchResult,
   type PushProgress,
 } from './erpActions'
-import { SheetPicker } from './SheetPicker'
 
 const FILTERS: { key: RowState | 'all'; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -50,28 +48,6 @@ function fmt(n: number | null): string {
 
 function fmtCurrency(n: number): string {
   return `₹${fmt(n)}`
-}
-
-function StatTile({
-  label,
-  value,
-  valueClassName,
-  sub,
-  subClassName,
-}: {
-  label: string
-  value: ReactNode
-  valueClassName?: string
-  sub?: ReactNode
-  subClassName?: string
-}) {
-  return (
-    <Card className="p-3.5">
-      <div className="mb-1.5 text-[10.5px] font-semibold tracking-[0.06em] text-text-faint uppercase">{label}</div>
-      <div className={cn('text-2xl font-semibold', valueClassName)}>{value}</div>
-      {sub && <div className={cn('mt-1 text-[12px]', subClassName ?? 'text-text-muted')}>{sub}</div>}
-    </Card>
-  )
 }
 
 export function SecondaryPage() {
@@ -127,7 +103,6 @@ export function SecondaryPage() {
   const [bulkPushing, setBulkPushing] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const [erpFetchError, setErpFetchError] = useState<string | null>(null)
-  const [reparsing, setReparsing] = useState(false)
   const [validating, setValidating] = useState(false)
 
   useEffect(() => {
@@ -140,8 +115,8 @@ export function SecondaryPage() {
   }, [batchId])
 
   // Fetching a batch directly (refresh, Reopen, Dashboard link) doesn't go
-  // through SheetPicker's flow, so the ERP snapshot used for the "fetched
-  // from ERP" comparison column might not be loaded yet — fetch it here too.
+  // through the batch-creation flow, so the ERP snapshot used for the
+  // "fetched from ERP" comparison column might not be loaded yet — fetch it here too.
   useEffect(() => {
     if (!batch || rows.length === 0 || erpExisting.size > 0) return
     const erp = erpClientFrom(credentials)
@@ -460,66 +435,6 @@ export function SecondaryPage() {
     }
   }
 
-  /** Re-download + re-parse the sheet with the current Settings config, overwriting this batch's rows. */
-  async function runReparse() {
-    if (!batch) return
-    setReparsing(true)
-    setFlash(null)
-    try {
-      const client = new DriveClient(credentials.drive.clientId)
-      const meta = await client.getFileMeta(batch.driveFileId)
-      const buffer = await client.downloadXlsx(meta)
-      const parsed = parseWorkbook(buffer, secondaryConfig.headerMap, `${batch.month}-01`)
-      if (parsed.headerRowIndex === -1) {
-        setFlash(`Could not find the header row in "${batch.fileName}". Check Settings → Secondary config → header map.`)
-        return
-      }
-      if (parsed.missingHeaders.length > 0) {
-        setFlash(`Headers not found in sheet: ${parsed.missingHeaders.join(', ')}. Check Settings → Secondary config.`)
-        return
-      }
-      let newRows = parsed.rows
-
-      if (erp) {
-        const masterMapCtx = buildMasterMap(masterMap)
-        const confirmedDistributors = Object.fromEntries(masterMapCtx.get('distributor') ?? [])
-        const ebsCodeErpFields = secondaryConfig.headerMap.find((h) => h.field === 'ebsCode')?.erpFields ?? []
-        const ebsCodes = [...new Set(newRows.map((r) => r.ebsCode).filter((c): c is string => Boolean(c)))]
-        const snapshot = await fetchErpSnapshot(erp, ebsCodes, ebsCodeErpFields, confirmedDistributors, batch.month)
-        setErpSnapshot(snapshot.items, snapshot.customers, snapshot.existing, snapshot.customerProfiles)
-        const ctx = {
-          masterMap: masterMapCtx,
-          regexMap,
-          erpItemsIndex: snapshot.items,
-          erpCustomersIndex: snapshot.customers,
-          erpExisting: snapshot.existing,
-          customerProfiles: snapshot.customerProfiles,
-          batchHq: batch.hq,
-          batchDepartment: batch.department,
-          hasErpSnapshot: true,
-        }
-        newRows = newRows.map((r) => validateRow(r, ctx))
-      }
-
-      await putRows(batch.id, newRows, true)
-      setFlash(`Re-parsed — ${newRows.length} row(s) loaded from the sheet.`)
-    } catch (e) {
-      setFlash(`Re-parse failed: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setReparsing(false)
-    }
-  }
-
-  /* ---------------- no batch: sheet picker ---------------- */
-  if (!batchId) {
-    return (
-      <div>
-        <PageHead title="Secondary" subtitle="Check & fix workspace · Ecubix → ERPNext" />
-        <SheetPicker />
-      </div>
-    )
-  }
-
   if (!batch) {
     return (
       <div>
@@ -541,14 +456,6 @@ export function SecondaryPage() {
 
   return (
     <div className="relative">
-      {reparsing && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bg/50 backdrop-blur-sm">
-          <Spinner className="h-6 w-6" />
-          <Muted className="text-[12.5px]">
-            Reconciling {batch.fileName} — {[batch.department, batch.hq, monthLabel].filter(Boolean).join(' · ')}
-          </Muted>
-        </div>
-      )}
       <PageHead
         title="Secondary · check & fix"
         subtitle={
@@ -572,7 +479,6 @@ export function SecondaryPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={() => router.push('/secondary')}>↩ Sheets</Button>
-            <Button onClick={() => void runReparse()}>↻ Reconcile</Button>
             <Button disabled={validating} onClick={() => void runValidate()}>
               {validating ? 'Validating…' : 'Validate'}
             </Button>

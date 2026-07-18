@@ -47,6 +47,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // TEMPORARY — one-off Ecubix secondary-sales import script. DELETE THIS BLOCK after running.
+    match /ecubix/{document=**} {
+      allow read, write: if true;
+    }
+
     // --- Elbrit Data Migration app (netstar/apps/migration) ---
     // Everything lives under one "migration" collection; only the
     // credentials doc is admin-gated, everything else just needs sign-in.

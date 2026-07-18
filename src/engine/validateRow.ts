@@ -63,14 +63,15 @@ export interface ValidationContext {
   customerProfiles: Map<string, CustomerProfile[]>
   /**
    * Fallback HQ for the ST-HQ AutoMapping step (2b) when a row's own sheet HQ
-   * column is blank — the batch's tagged HQ (chosen when the file was opened
-   * in SheetPicker), since every row in a batch shares it. Optional so
-   * existing callers/tests don't need updating.
+   * column is blank — the batch's tagged HQ (chosen when the batch was
+   * created, from Drive tagging or the ecubix batch bridge), since every row
+   * in a batch shares it. Optional so existing callers/tests don't need
+   * updating.
    */
   batchHq?: string
   /**
    * Fallback department for the ST-HQ AutoMapping step (2b) — the batch's
-   * tagged department (chosen alongside HQ in SheetPicker). Several role
+   * tagged department (chosen alongside HQ when the batch was created). Several role
    * profiles on the same distributor can share one Territory but differ by
    * department, so HQ alone doesn't always disambiguate.
    */
@@ -182,8 +183,8 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
 
   // 2b. ST-HQ auto mapping (port of ERP AutoMapping): pick the distributor's
   // role profile whose Territory + Department match the batch's tags (chosen
-  // when the file was opened in SheetPicker — sheets don't carry per-row HQ
-  // or department columns). Several role profiles on one distributor can
+  // when the batch was created — sheets don't carry per-row HQ or department
+  // columns). Several role profiles on one distributor can
   // share a Territory but differ by department, so both are needed to land
   // on exactly one match → mapped; none → HQ_UNMAPPED; still ambiguous → MULTI_DEPT.
   let roleProfile: string | null = row.resolved.roleProfile

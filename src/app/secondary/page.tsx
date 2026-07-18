@@ -1,5 +1,5 @@
-import { SecondaryPage } from '../../features/secondary/SecondaryPage'
+import { EcubixBrowser } from '../../features/secondary/EcubixBrowser'
 
 export default function Page() {
-  return <SecondaryPage />
+  return <EcubixBrowser />
 }

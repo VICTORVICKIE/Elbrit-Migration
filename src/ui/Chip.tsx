@@ -16,9 +16,7 @@ export function OutlineChip({
     <span
       className={cn(
         base,
-        active
-          ? 'border-accent bg-accent-soft text-accent-text'
-          : 'border-border-strong bg-surface text-text-muted',
+        active ? 'border-accent bg-accent text-white' : 'border-border-strong bg-surface text-text-muted',
         className,
       )}
       {...props}
@@ -37,9 +35,7 @@ export function OutlineChipButton({
       className={cn(
         base,
         'cursor-pointer',
-        active
-          ? 'border-accent bg-accent-soft text-accent-text'
-          : 'border-border-strong bg-surface text-text-muted',
+        active ? 'border-accent bg-accent text-white' : 'border-border-strong bg-surface text-text-muted',
         className,
       )}
       {...props}

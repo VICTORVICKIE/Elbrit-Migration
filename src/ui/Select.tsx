@@ -1,4 +1,5 @@
 import { Select as BaseSelect } from '@base-ui/react/select'
+import type { ReactNode } from 'react'
 import { cn } from './cn'
 
 export function Select({
@@ -8,6 +9,7 @@ export function Select({
   placeholder,
   disabled,
   className,
+  icon,
 }: {
   value: string
   onValueChange: (value: string) => void
@@ -15,6 +17,8 @@ export function Select({
   placeholder?: string
   disabled?: boolean
   className?: string
+  /** Optional leading icon (e.g. a calendar glyph) rendered before the selected value. */
+  icon?: ReactNode
 }) {
   return (
     <BaseSelect.Root
@@ -29,16 +33,19 @@ export function Select({
           className,
         )}
       >
-        <BaseSelect.Value placeholder={placeholder} />
-        <BaseSelect.Icon className="text-text-faint">
+        <span className="flex min-w-0 items-center gap-2">
+          {icon}
+          <BaseSelect.Value placeholder={placeholder} />
+        </span>
+        <BaseSelect.Icon className="shrink-0 text-text-faint">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner className="z-100 outline-none" sideOffset={4}>
-          <BaseSelect.Popup className="max-h-64 overflow-auto rounded-md border border-border bg-surface py-1 shadow-[var(--shadow-panel)] outline-none">
+        <BaseSelect.Positioner className="z-100 outline-none" side="bottom" align="start" sideOffset={4} alignItemWithTrigger={false}>
+          <BaseSelect.Popup className="w-[var(--anchor-width)] max-h-64 overflow-auto rounded-md border border-border bg-surface py-1 shadow-[var(--shadow-panel)] outline-none">
             <BaseSelect.List>
               {options.map((o) => (
                 <BaseSelect.Item

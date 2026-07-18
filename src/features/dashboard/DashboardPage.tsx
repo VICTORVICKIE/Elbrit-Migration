@@ -8,7 +8,7 @@ import { cn } from '../../ui/cn'
 import { Faint, Muted, PageHead, SectionLabel } from '../../ui/Text'
 
 const STEPS = [
-  { n: 1, title: 'Download from Ecubix', desc: 'Export the monthly sheet to the Drive migration folder' },
+  { n: 1, title: 'Download from Ecubix', desc: 'Synced into Firestore automatically each month' },
   { n: 2, title: 'Check & fix', desc: 'Resolve unmapped codes, item names and conflicts' },
   { n: 3, title: 'Push to ERPNext', desc: 'Creates new records, updates matched ones' },
   { n: 4, title: 'Validate', desc: 'Every ERP record is compared back against the sheet' },
@@ -16,7 +16,7 @@ const STEPS = [
 
 const SOON_TYPES = ['Visit', 'Service', 'Support']
 
-function statusSummary(counts: { synced: number; error: number; conflict: number; new: number; matched: number }) {
+export function statusSummary(counts: { synced: number; error: number; conflict: number; new: number; matched: number }) {
   const parts: string[] = []
   if (counts.synced) parts.push(`${counts.synced} synced`)
   const pending = counts.new + counts.matched
@@ -24,6 +24,20 @@ function statusSummary(counts: { synced: number; error: number; conflict: number
   if (counts.error) parts.push(`${counts.error} errors`)
   if (counts.conflict) parts.push(`${counts.conflict} conflicts`)
   return parts.join(' · ') || '—'
+}
+
+/**
+ * Same color priority as StatusChip's per-row states, collapsed to one tone
+ * for a multi-row summary: worst-outstanding-state wins — errors outrank
+ * conflicts outrank pending, so a batch with any errors always reads red,
+ * never green just because most of its rows happened to sync.
+ */
+export function statusTone(counts: { synced: number; error: number; conflict: number; new: number; matched: number }): string {
+  if (counts.error > 0) return 'text-status-error bg-status-error-bg'
+  if (counts.conflict > 0) return 'text-status-conflict bg-status-conflict-bg'
+  if (counts.new + counts.matched > 0) return 'text-status-new bg-status-new-bg'
+  if (counts.synced > 0) return 'text-status-synced bg-status-synced-bg'
+  return 'text-status-skipped bg-status-skipped-bg'
 }
 
 export function DashboardPage() {
