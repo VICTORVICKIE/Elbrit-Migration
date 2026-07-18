@@ -8,7 +8,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { StatusChip } from '../../components/StatusChip'
 import { buildMasterMap, useAppStore } from '../../data/appStore'
 import { normalizeItemName } from '../../engine/resolveItem'
-import { countRows, groupKey, validateRow } from '../../engine/validateRow'
+import { countRows, groupKey } from '../../engine/validateRow'
 import type { MigrationRow, RowState } from '../../types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
@@ -146,16 +146,28 @@ export function SecondaryPage() {
     [mappedHeaderMap],
   )
 
+  const displayHeaderMap = useMemo(
+    () => mappedHeaderMap.filter((h) => h.field !== 'ebsCode'),
+    [mappedHeaderMap],
+  )
+
   const groupedVisible = useMemo(() => {
     if (viewMode === 'flat') return null
     const groupField = viewMode === 'stockist' ? 'customerName' : 'itemName'
     const groups = new Map<
       string,
-      { count: number; sums: Record<string, number>; states: Partial<Record<RowState, number>>; issueCount: number }
+      {
+        count: number
+        sums: Record<string, number>
+        states: Partial<Record<RowState, number>>
+        issueCount: number
+        rows: MigrationRow[]
+        ebsCode?: string
+      }
     >()
     for (const r of visible) {
       const key = r[groupField] || '—'
-      const g = groups.get(key) ?? { count: 0, sums: {}, states: {}, issueCount: 0 }
+      const g = groups.get(key) ?? { count: 0, sums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined }
       g.count++
       for (const h of numericHeaderMap) {
         const v = r.raw[h.field]
@@ -163,10 +175,26 @@ export function SecondaryPage() {
       }
       g.states[r.state] = (g.states[r.state] ?? 0) + 1
       g.issueCount += r.issues.length > 0 ? r.issues.length : r.diff.length
+      g.rows.push(r)
       groups.set(key, g)
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
   }, [visible, viewMode, numericHeaderMap])
+
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    setExpandedGroups(new Set())
+  }, [viewMode, batchId])
+
+  const toggleGroup = (groupName: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(groupName)) next.delete(groupName)
+      else next.add(groupName)
+      return next
+    })
+  }
 
   // Only the flat row view needs virtualization — grouped views are bounded
   // by distinct stockist/item count, far smaller than raw row count.
@@ -831,7 +859,8 @@ export function SecondaryPage() {
               <tr>
                 {groupedVisible ? (
                   <>
-                    <th>{viewMode === 'stockist' ? 'Stockist' : 'Item'}</th>
+                    <th className="w-7.5" />
+                    <th>{viewMode === 'stockist' ? 'Stockist / Item' : 'Item / Stockist'}</th>
                     {numericHeaderMap.map((h) => (
                       <th key={h.field}>{h.sheetHeader || h.field}</th>
                     ))}
@@ -849,7 +878,7 @@ export function SecondaryPage() {
                         }
                       />
                     </th>
-                    {mappedHeaderMap.map((h) => (
+                    {displayHeaderMap.map((h) => (
                       <th key={h.field}>{h.sheetHeader || h.field}</th>
                     ))}
                     <th>Status</th>
@@ -860,35 +889,97 @@ export function SecondaryPage() {
             </thead>
             <tbody>
               {groupedVisible
-                ? groupedVisible.map(([groupName, g]) => (
-                    <tr key={groupName}>
-                      <td className="text-[12.5px]">{groupName}</td>
-                      {numericHeaderMap.map((h) => (
-                        <td key={h.field} className="text-[12.5px]">
-                          {fmt(g.sums[h.field] ?? null)}
+                ? groupedVisible.flatMap(([groupName, g]) => {
+                    const expanded = expandedGroups.has(groupName)
+                    const groupTr = (
+                      <tr key={groupName} className="clickable" onClick={() => toggleGroup(groupName)}>
+                        <td className="text-text-faint">
+                          <span className="inline-block w-3.5 text-center">{expanded ? '▾' : '▸'}</span>
                         </td>
-                      ))}
-                      <td className="text-[12.5px] text-text-faint">{g.count}</td>
-                      <td>
-                        <span className="flex flex-wrap gap-1">
-                          {(Object.entries(g.states) as [RowState, number][]).map(([state, n]) => (
-                            <span key={state} className="inline-flex items-center gap-1">
-                              <StatusChip state={state} />
-                              <Faint className="text-[11px]">×{n}</Faint>
-                            </span>
-                          ))}
-                        </span>
-                      </td>
-                      {prefs.issueHints && (
-                        <td className="text-xs text-status-error">
-                          {g.issueCount > 0 ? `${g.issueCount} issue(s)` : ''}
+                        <td className="text-[12.5px]">
+                          {viewMode === 'stockist' && g.ebsCode ? (
+                            <>
+                              <Faint>{g.ebsCode}</Faint> — {groupName}
+                            </>
+                          ) : (
+                            groupName
+                          )}
                         </td>
-                      )}
-                    </tr>
-                  ))
+                        {numericHeaderMap.map((h) => (
+                          <td key={h.field} className="text-[12.5px]">
+                            {fmt(g.sums[h.field] ?? null)}
+                          </td>
+                        ))}
+                        <td className="text-[12.5px] text-text-faint">{g.count}</td>
+                        <td>
+                          <span className="flex flex-wrap gap-1">
+                            {(Object.entries(g.states) as [RowState, number][]).map(([state, n]) => (
+                              <span key={state} className="inline-flex items-center gap-1">
+                                <StatusChip state={state} />
+                                <Faint className="text-[11px]">×{n}</Faint>
+                              </span>
+                            ))}
+                          </span>
+                        </td>
+                        {prefs.issueHints && (
+                          <td className="text-xs text-status-error">
+                            {g.issueCount > 0 ? `${g.issueCount} issue(s)` : ''}
+                          </td>
+                        )}
+                      </tr>
+                    )
+                    if (!expanded) return [groupTr]
+                    const detailRows = g.rows.map((r) => (
+                      <tr
+                        key={r.id}
+                        className={cn('clickable', detailRowId === r.id && 'row-selected')}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDetailRowId(r.id === detailRowId ? null : r.id)
+                        }}
+                      >
+                        <td />
+                        <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
+                          {viewMode === 'stockist'
+                            ? r.itemName || '—'
+                            : r.customerName
+                              ? (
+                                <>
+                                  {r.ebsCode && <><Faint>{r.ebsCode}</Faint>{' — '}</>}
+                                  {r.customerName}
+                                </>
+                              )
+                              : '—'}
+                        </td>
+                        {numericHeaderMap.map((h) => {
+                          const v = r.raw[h.field]
+                          return (
+                            <td key={h.field} className="text-[12.5px]">
+                              {typeof v === 'number' ? fmt(v) : '—'}
+                            </td>
+                          )
+                        })}
+                        <td />
+                        <td><StatusChip state={r.state} /></td>
+                        {prefs.issueHints && (
+                          <td
+                            className="max-w-70 truncate text-xs text-status-error"
+                            title={r.issues.length > 0 ? r.issues.map((i) => i.message).join('\n') : undefined}
+                          >
+                            {r.issues.length > 0
+                              ? `${r.issues[0].message}${r.issues.length > 1 ? ` (+${r.issues.length - 1})` : ''}`
+                              : r.diff.length > 0
+                                ? `${r.diff.length} field(s) differ`
+                                : ''}
+                          </td>
+                        )}
+                      </tr>
+                    ))
+                    return [groupTr, ...detailRows]
+                  })
                 : (() => {
                     const virtualItems = rowVirtualizer.getVirtualItems()
-                    const colSpan = mappedHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
+                    const colSpan = displayHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
                     const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0
                     const paddingBottom =
                       virtualItems.length > 0
@@ -922,10 +1013,15 @@ export function SecondaryPage() {
                                   }}
                                 />
                               </td>
-                              {mappedHeaderMap.map((h) => {
+                              {displayHeaderMap.map((h) => {
                                 const v = r.raw[h.field]
                                 return (
                                   <td key={h.field} className="text-[12.5px]">
+                                    {h.field === 'customerName' && r.ebsCode && (
+                                      <>
+                                        <Faint>{r.ebsCode}</Faint>{' — '}
+                                      </>
+                                    )}
                                     {typeof v === 'number' ? fmt(v) : (v ?? '—')}
                                   </td>
                                 )
@@ -959,8 +1055,8 @@ export function SecondaryPage() {
                   <td
                     colSpan={
                       groupedVisible
-                        ? numericHeaderMap.length + 3 + (prefs.issueHints ? 1 : 0)
-                        : mappedHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
+                        ? numericHeaderMap.length + 4 + (prefs.issueHints ? 1 : 0)
+                        : displayHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
                     }
                     className="py-7 text-center text-text-muted"
                   >
