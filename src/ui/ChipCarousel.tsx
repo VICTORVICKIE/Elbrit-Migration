@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { cn } from './cn'
 import { OutlineChipButton } from './Chip'
 
@@ -32,9 +32,15 @@ function ChipBadge({ badge, active }: { badge: CarouselBadge; active?: boolean }
 }
 
 /**
- * A chip row that turns into a horizontally-scrollable strip with
- * prev/next arrows once there are more than a handful of options, instead
- * of wrapping into an ever-taller wall of buttons as the option count grows.
+ * A chip row that shares available width with its siblings by content
+ * (no forced equal split), and only turns into a horizontally-scrollable
+ * strip with prev/next arrows once its chips actually no longer fit —
+ * measured live, rather than guessed from a fixed item-count threshold.
+ *
+ * `grow` opts into an equal split with its sibling instead of a
+ * content-sized share — the caller sets this once it knows both siblings
+ * need to scroll anyway, since giving the bigger one more room at that
+ * point just skews clicks without letting either show everything.
  */
 export function ChipCarousel({
   items,
@@ -42,23 +48,39 @@ export function ChipCarousel({
   onChange,
   allLabel,
   allBadge,
+  grow,
+  onNaturalWidthChange,
 }: {
   items: CarouselItem[]
   value: string | null
   onChange: (value: string | null) => void
   allLabel: string
   allBadge?: CarouselBadge
+  grow?: boolean
+  onNaturalWidthChange?: (width: number) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  // +1 for the always-present "All X" chip, so the threshold counts total visible chips, not just the specific options.
-  const showArrows = items.length + 1 > 5
+  const [showArrows, setShowArrows] = useState(false)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const checkOverflow = () => {
+      setShowArrows(el.scrollWidth > el.clientWidth + 1)
+      onNaturalWidthChange?.(el.scrollWidth)
+    }
+    checkOverflow()
+    const observer = new ResizeObserver(checkOverflow)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [items, value, allLabel, allBadge, onNaturalWidthChange])
 
   function scrollBy(delta: number) {
     scrollRef.current?.scrollBy({ left: delta, behavior: 'smooth' })
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    <div className={cn('flex min-w-0 items-center gap-1', grow && 'flex-1')}>
       {showArrows && (
         <button
           type="button"
@@ -69,11 +91,7 @@ export function ChipCarousel({
           ‹
         </button>
       )}
-      <div
-        ref={scrollRef}
-        className="scrollbar-none flex min-w-0 items-center gap-1.5 overflow-x-auto scroll-smooth"
-        style={showArrows ? { maxWidth: '17rem' } : undefined}
-      >
+      <div ref={scrollRef} className="scrollbar-none flex min-w-0 items-center gap-1.5 overflow-x-auto scroll-smooth">
         <OutlineChipButton active={!value} onClick={() => onChange(null)} className="shrink-0">
           {allLabel}
           {allBadge && <ChipBadge badge={allBadge} active={!value} />}

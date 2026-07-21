@@ -172,6 +172,32 @@ export function EcubixBrowser() {
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null)
   const [selectedHq, setSelectedHq] = useState<string | null>(null)
 
+  // Department/HQ chip rows share width by content, except once both need
+  // to scroll anyway — at that point an equal split beats letting whichever
+  // has more chips crowd out the other, since neither can show everything.
+  const carouselAreaRef = useRef<HTMLDivElement>(null)
+  const deptLabelRef = useRef<HTMLSpanElement>(null)
+  const hqLabelRef = useRef<HTMLSpanElement>(null)
+  const dividerRef = useRef<HTMLSpanElement>(null)
+  const [carouselAreaWidth, setCarouselAreaWidth] = useState(0)
+  const [deptNaturalWidth, setDeptNaturalWidth] = useState(0)
+  const [hqNaturalWidth, setHqNaturalWidth] = useState(0)
+
+  useEffect(() => {
+    const el = carouselAreaRef.current
+    if (!el) return
+    const measure = () => setCarouselAreaWidth(el.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  const carouselOverhead =
+    (deptLabelRef.current?.offsetWidth ?? 0) + (hqLabelRef.current?.offsetWidth ?? 0) + (dividerRef.current?.offsetWidth ?? 0) + 32
+  const availableForChips = Math.max(carouselAreaWidth - carouselOverhead, 0)
+  const bothNeedCarousel = deptNaturalWidth > availableForChips / 2 && hqNaturalWidth > availableForChips / 2
+
   useEffect(() => {
     let cancelled = false
     getSecondaryOverview()
@@ -766,24 +792,34 @@ export function EcubixBrowser() {
               ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4.5 py-2.5">
-              <span className="mr-0.5 shrink-0 text-[10px] font-bold tracking-[0.06em] text-text-faint">DEPARTMENT</span>
-              <ChipCarousel
-                items={departmentOptions.map((d) => ({ ...d, badge: departmentBadges.get(d.value) }))}
-                value={selectedDepartment}
-                onChange={selectDepartment}
-                allLabel="All departments"
-                allBadge={allDeptBadge}
-              />
-              <span className="mx-1 h-4.5 w-px shrink-0 bg-border" />
-              <span className="mr-0.5 shrink-0 text-[10px] font-bold tracking-[0.06em] text-text-faint">HQ</span>
-              <ChipCarousel
-                items={hqOptions.map((h) => ({ ...h, badge: hqBadges.get(h.value) }))}
-                value={selectedHq}
-                onChange={setSelectedHq}
-                allLabel="All HQs"
-                allBadge={allDeptBadge}
-              />
+            <div className="flex items-center gap-2 border-b border-border px-4.5 py-2.5">
+              <div ref={carouselAreaRef} className="flex min-w-0 flex-1 items-center gap-2">
+                <span ref={deptLabelRef} className="mr-0.5 shrink-0 text-[10px] font-bold tracking-[0.06em] text-text-faint">
+                  DEPARTMENT
+                </span>
+                <ChipCarousel
+                  items={departmentOptions.map((d) => ({ ...d, badge: departmentBadges.get(d.value) }))}
+                  value={selectedDepartment}
+                  onChange={selectDepartment}
+                  allLabel="All departments"
+                  allBadge={allDeptBadge}
+                  grow={bothNeedCarousel}
+                  onNaturalWidthChange={setDeptNaturalWidth}
+                />
+                <span ref={dividerRef} className="mx-1 h-4.5 w-px shrink-0 bg-border" />
+                <span ref={hqLabelRef} className="mr-0.5 shrink-0 text-[10px] font-bold tracking-[0.06em] text-text-faint">
+                  HQ
+                </span>
+                <ChipCarousel
+                  items={hqOptions.map((h) => ({ ...h, badge: hqBadges.get(h.value) }))}
+                  value={selectedHq}
+                  onChange={setSelectedHq}
+                  allLabel="All HQs"
+                  allBadge={allDeptBadge}
+                  grow={bothNeedCarousel}
+                  onNaturalWidthChange={setHqNaturalWidth}
+                />
+              </div>
               {filtersActive && (
                 <button
                   type="button"
