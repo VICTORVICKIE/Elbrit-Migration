@@ -9,7 +9,7 @@ import { StatusChip } from '../../components/StatusChip'
 import { buildMasterMap, useAppStore } from '../../data/appStore'
 import { normalizeItemName } from '../../engine/resolveItem'
 import { countRows, groupKey } from '../../engine/validateRow'
-import type { MigrationRow, RowState } from '../../types'
+import type { CustomerProfile, ItemDepartment, MigrationRow, RowState } from '../../types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { Checkbox } from '../../ui/Checkbox'
@@ -19,11 +19,15 @@ import { Spinner } from '../../ui/Spinner'
 import { Faint, Muted, PageHead, SectionLabel } from '../../ui/Text'
 import { SearchableSelect } from '../../ui/Combobox'
 import { StatTile } from '../../ui/StatTile'
+import { EbsCodesDialog } from './EbsCodesDialog'
+import { ItemDepartmentsDialog } from './ItemDepartmentsDialog'
 import { MapCustomerDialog } from './MapCustomerDialog'
+import { RoleProfileDialog } from './RoleProfileDialog'
 import { RowDetailPanel } from './RowDetailPanel'
 import {
   erpClientFrom,
   fetchErpSnapshot,
+  fetchItemDepartments,
   matchCustomersByEbsCode,
   matchItemsByName,
   pushRows,
@@ -50,6 +54,23 @@ function fmtCurrency(n: number): string {
   return `₹${fmt(n)}`
 }
 
+const ISSUE_LABELS: Record<string, string> = {
+  FIELD_MISSING: 'Field missing',
+  CUSTOMER_UNMAPPED: 'Customer unmapped',
+  ITEM_UNMAPPED: 'Item unmapped',
+  HQ_UNMAPPED: 'HQ unmapped',
+  MULTI_DEPT: 'Multiple departments',
+  FIELD_INVALID: 'Field invalid',
+  DATE_INVALID: 'Date invalid',
+  NEGATIVE_VALUE: 'Negative value',
+  PUSH_FAILED: 'Push failed',
+  POST_PUSH_MISMATCH: 'Post-push mismatch',
+}
+
+function issueLabel(code: string): string {
+  return ISSUE_LABELS[code] ?? code
+}
+
 export function SecondaryPage() {
   const params = useParams<{ batchId?: string }>()
   const batchId = params.batchId
@@ -66,6 +87,7 @@ export function SecondaryPage() {
     masterMap,
     regexMap,
     erpExisting,
+    customerProfiles,
     setErpSnapshot,
     secondaryConfig,
     confirmMasterMatch,
@@ -84,6 +106,7 @@ export function SecondaryPage() {
       masterMap: s.masterMap,
       regexMap: s.regexMap,
       erpExisting: s.erpExisting,
+      customerProfiles: s.customerProfiles,
       setErpSnapshot: s.setErpSnapshot,
       secondaryConfig: s.secondaryConfig,
       confirmMasterMatch: s.confirmMasterMatch,
@@ -95,10 +118,18 @@ export function SecondaryPage() {
   const batch = batches.find((b) => b.id === batchId)
 
   const [filter, setFilter] = useState<RowState | 'all'>('all')
-  const [viewMode, setViewMode] = useState<'flat' | 'stockist' | 'item'>('flat')
+  const [viewMode, setViewMode] = useState<'flat' | 'stockist'>('stockist')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [detailRowId, setDetailRowId] = useState<string | null>(null)
   const [mapDialog, setMapDialog] = useState<{ ebsCode: string; customerName: string } | null>(null)
+  const [roleProfileDialog, setRoleProfileDialog] = useState<{ customerName: string; profiles: CustomerProfile[] } | null>(
+    null,
+  )
+  const [ebsCodesDialog, setEbsCodesDialog] = useState<{ customerName: string; values: string[] } | null>(null)
+  const [itemDepartmentsDialog, setItemDepartmentsDialog] = useState<{
+    itemName: string
+    departments: ItemDepartment[]
+  } | null>(null)
   const [pushProgress, setPushProgress] = useState<PushProgress | null>(null)
   const [bulkPushing, setBulkPushing] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -153,7 +184,6 @@ export function SecondaryPage() {
 
   const groupedVisible = useMemo(() => {
     if (viewMode === 'flat') return null
-    const groupField = viewMode === 'stockist' ? 'customerName' : 'itemName'
     const groups = new Map<
       string,
       {
@@ -166,7 +196,7 @@ export function SecondaryPage() {
       }
     >()
     for (const r of visible) {
-      const key = r[groupField] || '—'
+      const key = r.customerName || '—'
       const g = groups.get(key) ?? { count: 0, sums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined }
       g.count++
       for (const h of numericHeaderMap) {
@@ -239,9 +269,11 @@ export function SecondaryPage() {
 
   const [customerMatches, setCustomerMatches] = useState<Map<string, MasterMatchResult>>(new Map())
   const [customerOptions, setCustomerOptions] = useState<string[]>([])
+  const [customerEbsValues, setCustomerEbsValues] = useState<Map<string, string[]>>(new Map())
   const [pendingCustomerOverrides, setPendingCustomerOverrides] = useState<Map<string, string>>(new Map())
   const [itemMatches, setItemMatches] = useState<Map<string, MasterMatchResult>>(new Map())
   const [itemOptions, setItemOptions] = useState<string[]>([])
+  const [itemDepartments, setItemDepartments] = useState<Map<string, ItemDepartment[]>>(new Map())
   const [pendingItemOverrides, setPendingItemOverrides] = useState<Map<string, string>>(new Map())
   const [customerMatchesLoading, setCustomerMatchesLoading] = useState(false)
   const [itemMatchesLoading, setItemMatchesLoading] = useState(false)
@@ -265,6 +297,7 @@ export function SecondaryPage() {
         if (cancelled) return
         setCustomerMatches(outcome.matches)
         setCustomerOptions(outcome.options)
+        setCustomerEbsValues(outcome.valuesByDoc ?? new Map())
       })
       .catch((e) => console.error('[SecondaryPage] customer match failed', e))
       .finally(() => {
@@ -296,6 +329,55 @@ export function SecondaryPage() {
       cancelled = true
     }
   }, [itemRows, itemNameErpFields, credentials, masterMap, regexMap])
+
+  const matchedItemDocs = useMemo(
+    () => [...new Set([...itemMatches.values()].map((m) => m.erpValue).filter((v): v is string => Boolean(v)))],
+    [itemMatches],
+  )
+
+  useEffect(() => {
+    if (matchedItemDocs.length === 0) return
+    const erpClient = erpClientFrom(credentials)
+    if (!erpClient) return
+    let cancelled = false
+    fetchItemDepartments(erpClient, matchedItemDocs)
+      .then((departments) => {
+        if (!cancelled) setItemDepartments(departments)
+      })
+      .catch((e) => console.error('[SecondaryPage] item department fetch failed', e))
+    return () => {
+      cancelled = true
+    }
+  }, [matchedItemDocs, credentials])
+
+  // "Matched" requires both an ERP customer resolved AND (when the batch has a
+  // tagged HQ/department) a role profile matching it — same rule as the
+  // per-row Matched cell, shared here so the card header's unresolved count
+  // agrees with the table.
+  const customerMatchStatus = useMemo(() => {
+    const wantedHq = (batch?.hq ?? '').trim().toLowerCase()
+    const wantedDept = (batch?.department ?? '').trim().toLowerCase()
+    const hasBatchTag = Boolean(wantedHq || wantedDept)
+    const map = new Map<string, boolean>()
+    for (const c of customerRows) {
+      const m = customerMatches.get(c.ebsCode)
+      const profiles = m?.erpValue ? (customerProfiles.get(m.erpValue) ?? []) : []
+      const roleProfileMatches =
+        !hasBatchTag ||
+        profiles.some(
+          (p) =>
+            (!wantedHq || p.hq.trim().toLowerCase() === wantedHq) &&
+            (!wantedDept || p.department.trim().toLowerCase() === wantedDept),
+        )
+      map.set(c.ebsCode, Boolean(m?.erpValue) && roleProfileMatches)
+    }
+    return map
+  }, [customerRows, customerMatches, customerProfiles, batch?.hq, batch?.department])
+
+  const customerUnresolvedCount = useMemo(
+    () => customerRows.filter((c) => !customerMatchStatus.get(c.ebsCode)).length,
+    [customerRows, customerMatchStatus],
+  )
 
   async function confirmCustomerMatch(ebsCode: string, erpValue: string) {
     setConfirmingCustomer(ebsCode)
@@ -333,10 +415,16 @@ export function SecondaryPage() {
     let erpSalesValue = 0
     let sheetClosingValue = 0
     let erpClosingValue = 0
+    let sheetSalesQty = 0
+    let erpSalesQty = 0
+    let sheetClosingQty = 0
+    let erpClosingQty = 0
     let matchedEqualValue = 0
     for (const r of rows) {
       sheetSalesValue += r.values.sales_value ?? 0
       sheetClosingValue += r.values.closing_balance ?? 0
+      sheetSalesQty += r.values.sales_qty ?? 0
+      sheetClosingQty += r.values.closing_qty ?? 0
       const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
       const line = doc && r.resolved.item
         ? doc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(r.resolved.item!))
@@ -344,6 +432,8 @@ export function SecondaryPage() {
       if (line) {
         erpSalesValue += line.sales_value ?? 0
         erpClosingValue += line.closing_balance ?? 0
+        erpSalesQty += line.sales_qty ?? 0
+        erpClosingQty += line.closing_qty ?? 0
         if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
       }
     }
@@ -357,6 +447,10 @@ export function SecondaryPage() {
       erpSalesValue,
       sheetClosingValue,
       erpClosingValue,
+      sheetSalesQty,
+      erpSalesQty,
+      sheetClosingQty,
+      erpClosingQty,
       matchedEqualValue,
       matchedPct: sheetSalesValue > 0 ? Math.round((matchedEqualValue / sheetSalesValue) * 100) : 0,
       masterDataPending: customerMatchesPending || itemMatchesPending,
@@ -563,25 +657,11 @@ export function SecondaryPage() {
           }
           sub={kpis.masterDataPending ? 'loading…' : `${kpis.customersUnmapped} customers · ${kpis.itemsUnmapped} items`}
         />
-      </div>
-      <div className="mb-5.5 grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
         <StatTile
           label="Customers"
           value={kpis.customersTotal}
           sub={kpis.masterDataPending ? 'loading…' : `${kpis.customersMapped} mapped · ${kpis.customersUnmapped} unmapped`}
           subClassName={!kpis.masterDataPending && kpis.customersUnmapped > 0 ? 'text-status-error' : 'text-status-synced'}
-        />
-        <StatTile
-          label="Secondary value"
-          value={fmtCurrency(kpis.sheetSalesValue)}
-          sub={`ERP ${fmtCurrency(kpis.erpSalesValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetSalesValue - kpis.erpSalesValue))}`}
-          subClassName={kpis.sheetSalesValue !== kpis.erpSalesValue ? 'text-status-error' : 'text-status-synced'}
-        />
-        <StatTile
-          label="Closing value"
-          value={fmtCurrency(kpis.sheetClosingValue)}
-          sub={`ERP ${fmtCurrency(kpis.erpClosingValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetClosingValue - kpis.erpClosingValue))}`}
-          subClassName={kpis.sheetClosingValue !== kpis.erpClosingValue ? 'text-status-error' : 'text-status-synced'}
         />
         <StatTile
           label="Value matched"
@@ -591,32 +671,90 @@ export function SecondaryPage() {
         />
       </div>
 
+      {/* VALUE RECONCILIATION — sheet (Ecubix) vs ERPNext, qty + value */}
+      <SectionLabel className="mb-2 block">Value reconciliation · ECUBIX vs ERPNext</SectionLabel>
+      <div className="mb-5.5 grid grid-cols-4 gap-2.5">
+        <StatTile
+          label="Secondary qty"
+          value={fmt(kpis.sheetSalesQty)}
+          sub={`ERP ${fmt(kpis.erpSalesQty)} · diff ${fmt(Math.abs(kpis.sheetSalesQty - kpis.erpSalesQty))}`}
+          subClassName={kpis.sheetSalesQty !== kpis.erpSalesQty ? 'text-status-error' : 'text-status-synced'}
+        />
+        <StatTile
+          label="Secondary value"
+          value={fmtCurrency(kpis.sheetSalesValue)}
+          sub={`ERP ${fmtCurrency(kpis.erpSalesValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetSalesValue - kpis.erpSalesValue))}`}
+          subClassName={kpis.sheetSalesValue !== kpis.erpSalesValue ? 'text-status-error' : 'text-status-synced'}
+        />
+        <StatTile
+          label="Closing qty"
+          value={fmt(kpis.sheetClosingQty)}
+          sub={`ERP ${fmt(kpis.erpClosingQty)} · diff ${fmt(Math.abs(kpis.sheetClosingQty - kpis.erpClosingQty))}`}
+          subClassName={kpis.sheetClosingQty !== kpis.erpClosingQty ? 'text-status-error' : 'text-status-synced'}
+        />
+        <StatTile
+          label="Closing value"
+          value={fmtCurrency(kpis.sheetClosingValue)}
+          sub={`ERP ${fmtCurrency(kpis.erpClosingValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetClosingValue - kpis.erpClosingValue))}`}
+          subClassName={kpis.sheetClosingValue !== kpis.erpClosingValue ? 'text-status-error' : 'text-status-synced'}
+        />
+      </div>
+
       {/* MASTER DATA — fixed Customer (exact, by EBS code) + Item (fuzzy, by product name) */}
       <SectionLabel className="mb-2 block">Master data</SectionLabel>
       <div className="grid grid-cols-2 gap-3.5 mb-5.5">
         <Card>
           <div className="flex items-center justify-between p-3 px-3.5">
             <span className="font-semibold">Customer</span>
-            <Muted className="text-[12.5px]">
-              {customerMatchesPending
-                ? '…'
-                : `${customerRows.filter((c) => !customerMatches.get(c.ebsCode)?.erpValue).length} unresolved · ${customerRows.length} distinct`}
-            </Muted>
+            <span className="text-[12.5px]">
+              {customerMatchesPending ? (
+                <Muted>…</Muted>
+              ) : (
+                (() => {
+                  const matched = customerRows.length - customerUnresolvedCount
+                  return customerRows.length === 0 ? (
+                    <Muted>0 distinct</Muted>
+                  ) : (
+                    <>
+                      {customerUnresolvedCount > 0 && (
+                        <span className="text-status-error">{customerUnresolvedCount} unresolved</span>
+                      )}
+                      {customerUnresolvedCount > 0 && matched > 0 && <Faint> · </Faint>}
+                      {matched > 0 && <span className="text-status-synced">{matched} Matched</span>}
+                    </>
+                  )
+                })()
+              )}
+            </span>
           </div>
           <div className="table-scroll max-h-70 overflow-y-auto">
             <table className="table-data min-w-0">
+              <colgroup>
+                <col className="w-[16%]" />
+                <col className="w-[10%]" />
+                <col className="w-[30%]" />
+                <col className="w-[10%]" />
+                <col className="w-[16%]" />
+                <col className="w-[18%]" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Stockist Code</th>
+                  <th colSpan={2} className="text-center">ECUBIX</th>
+                  <th colSpan={3} className="border-l border-l-border-strong text-center">ERP</th>
+                  <th rowSpan={2} className="border-l border-l-border-strong">Matched</th>
+                </tr>
+                <tr>
                   <th>Stockist</th>
-                  <th>ERP Customer</th>
-                  <th>Matched</th>
+                  <th>EBS</th>
+                  <th className="border-l border-l-border-strong">Customer</th>
+                  <th>EBS</th>
+                  <th>Role Profile</th>
                 </tr>
               </thead>
               <tbody>
                 {customerMatchesPending && (
                   <tr>
-                    <td colSpan={4} className="py-7 text-center text-text-muted">
+                    <td colSpan={6} className="py-7 text-center text-text-muted">
                       <span className="inline-flex items-center gap-2">
                         <Spinner className="h-3.5 w-3.5" />
                         Loading ERP matches…
@@ -627,11 +765,16 @@ export function SecondaryPage() {
                 {!customerMatchesPending && customerRows.map((c) => {
                   const m = customerMatches.get(c.ebsCode)
                   const pending = pendingCustomerOverrides.get(c.ebsCode)
+                  const profiles = m?.erpValue ? (customerProfiles.get(m.erpValue) ?? []) : []
+                  const erpEbsValues = m?.erpValue ? (customerEbsValues.get(m.erpValue) ?? []) : []
+                  const isMatched = customerMatchStatus.get(c.ebsCode) ?? false
                   return (
                     <tr key={c.ebsCode}>
+                      <td className="max-w-45 !h-auto py-1.5 text-[12.5px] whitespace-normal break-words !overflow-visible">
+                        {c.customerName}
+                      </td>
                       <td className="mono text-[12.5px]">{c.ebsCode}</td>
-                      <td className="text-[12.5px]">{c.customerName}</td>
-                      <td>
+                      <td className="border-l border-l-border-strong">
                         <SearchableSelect
                           className="!w-full !px-1.5 !py-0.5"
                           value={pending ?? m?.erpValue ?? ''}
@@ -644,7 +787,29 @@ export function SecondaryPage() {
                           }}
                         />
                       </td>
-                      <td className="text-xs">
+                      <td>
+                        {erpEbsValues.length > 0 ? (
+                          <OutlineChipButton
+                            onClick={() => setEbsCodesDialog({ customerName: m!.erpValue!, values: erpEbsValues })}
+                          >
+                            {erpEbsValues.length === 1 ? erpEbsValues[0] : `${erpEbsValues.length} EBS codes`}
+                          </OutlineChipButton>
+                        ) : (
+                          <Faint className="text-[12.5px]">—</Faint>
+                        )}
+                      </td>
+                      <td>
+                        {profiles.length > 0 ? (
+                          <OutlineChipButton
+                            onClick={() => setRoleProfileDialog({ customerName: m!.erpValue!, profiles })}
+                          >
+                            {profiles.length} role profile{profiles.length === 1 ? '' : 's'}
+                          </OutlineChipButton>
+                        ) : (
+                          <Faint className="text-[12.5px]">—</Faint>
+                        )}
+                      </td>
+                      <td className="border-l border-l-border-strong text-xs">
                         {pending != null && pending !== m?.erpValue ? (
                           <span className="flex flex-wrap items-center gap-1.5 text-status-conflict">
                             Override
@@ -671,8 +836,15 @@ export function SecondaryPage() {
                               Cancel
                             </button>
                           </span>
-                        ) : m?.erpValue ? (
+                        ) : isMatched ? (
                           <span className="text-status-synced">✓ Matched</span>
+                        ) : m?.erpValue ? (
+                          <OutlineChipButton
+                            className="!border-status-error !text-status-error"
+                            onClick={() => setRoleProfileDialog({ customerName: m.erpValue!, profiles })}
+                          >
+                            Role profile mismatch
+                          </OutlineChipButton>
                         ) : (
                           <span className="text-status-error">No match — pick above</span>
                         )}
@@ -682,7 +854,7 @@ export function SecondaryPage() {
                 })}
                 {!customerMatchesPending && customerRows.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="py-7 text-center text-text-muted">—</td>
+                    <td colSpan={6} className="py-7 text-center text-text-muted">—</td>
                   </tr>
                 )}
               </tbody>
@@ -693,25 +865,50 @@ export function SecondaryPage() {
         <Card>
           <div className="flex items-center justify-between p-3 px-3.5">
             <span className="font-semibold">Item</span>
-            <Muted className="text-[12.5px]">
-              {itemMatchesPending
-                ? '…'
-                : `${itemRows.filter((name) => !itemMatches.get(name)?.erpValue).length} unresolved · ${itemRows.length} distinct`}
-            </Muted>
+            <span className="text-[12.5px]">
+              {itemMatchesPending ? (
+                <Muted>…</Muted>
+              ) : (
+                (() => {
+                  const unresolved = itemRows.filter((name) => !itemMatches.get(name)?.erpValue).length
+                  const matched = itemRows.length - unresolved
+                  return itemRows.length === 0 ? (
+                    <Muted>0 distinct</Muted>
+                  ) : (
+                    <>
+                      {unresolved > 0 && <span className="text-status-error">{unresolved} unresolved</span>}
+                      {unresolved > 0 && matched > 0 && <Faint> · </Faint>}
+                      {matched > 0 && <span className="text-status-synced">{matched} Matched</span>}
+                    </>
+                  )
+                })()
+              )}
+            </span>
           </div>
           <div className="table-scroll max-h-70 overflow-y-auto">
             <table className="table-data min-w-0">
+              <colgroup>
+                <col className="w-[30%]" />
+                <col className="w-[32%]" />
+                <col className="w-[20%]" />
+                <col className="w-[18%]" />
+              </colgroup>
               <thead>
                 <tr>
+                  <th className="text-center">ECUBIX</th>
+                  <th colSpan={2} className="border-l border-l-border-strong text-center">ERP</th>
+                  <th rowSpan={2} className="border-l border-l-border-strong">Matched</th>
+                </tr>
+                <tr>
                   <th>Product</th>
-                  <th>ERP Item</th>
-                  <th>Matched</th>
+                  <th className="border-l border-l-border-strong">Item</th>
+                  <th>Department</th>
                 </tr>
               </thead>
               <tbody>
                 {itemMatchesPending && (
                   <tr>
-                    <td colSpan={3} className="py-7 text-center text-text-muted">
+                    <td colSpan={4} className="py-7 text-center text-text-muted">
                       <span className="inline-flex items-center gap-2">
                         <Spinner className="h-3.5 w-3.5" />
                         Loading ERP matches…
@@ -722,10 +919,11 @@ export function SecondaryPage() {
                 {!itemMatchesPending && itemRows.map((name) => {
                   const m = itemMatches.get(name)
                   const pending = pendingItemOverrides.get(name)
+                  const departments = m?.erpValue ? (itemDepartments.get(m.erpValue) ?? []) : []
                   return (
                     <tr key={name}>
                       <td className="text-[12.5px]">{name}</td>
-                      <td>
+                      <td className="border-l border-l-border-strong">
                         <SearchableSelect
                           className="!w-full !px-1.5 !py-0.5"
                           value={pending ?? m?.erpValue ?? m?.suggestion ?? ''}
@@ -738,7 +936,18 @@ export function SecondaryPage() {
                           }}
                         />
                       </td>
-                      <td className="text-xs">
+                      <td>
+                        {departments.length > 0 ? (
+                          <OutlineChipButton
+                            onClick={() => setItemDepartmentsDialog({ itemName: m!.erpValue!, departments })}
+                          >
+                            {departments.length} Department{departments.length === 1 ? '' : 's'}
+                          </OutlineChipButton>
+                        ) : (
+                          <Faint className="text-[12.5px]">—</Faint>
+                        )}
+                      </td>
+                      <td className="border-l border-l-border-strong text-xs">
                         {pending != null && pending !== m?.erpValue ? (
                           <span className="flex flex-wrap items-center gap-1.5 text-status-conflict">
                             Override
@@ -788,7 +997,7 @@ export function SecondaryPage() {
                 })}
                 {!itemMatchesPending && itemRows.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="py-7 text-center text-text-muted">—</td>
+                    <td colSpan={4} className="py-7 text-center text-text-muted">—</td>
                   </tr>
                 )}
               </tbody>
@@ -824,15 +1033,6 @@ export function SecondaryPage() {
           >
             By Stockist
           </OutlineChipButton>
-          <OutlineChipButton
-            active={viewMode === 'item'}
-            onClick={() => {
-              setViewMode('item')
-              setSelected(new Set())
-            }}
-          >
-            By Item
-          </OutlineChipButton>
         </span>
       </div>
       {selected.size > 0 && (
@@ -861,7 +1061,7 @@ export function SecondaryPage() {
                 {groupedVisible ? (
                   <>
                     <th className="w-7.5" />
-                    <th>{viewMode === 'stockist' ? 'Stockist / Item' : 'Item / Stockist'}</th>
+                    <th>Stockist / Item</th>
                     {numericHeaderMap.map((h) => (
                       <th key={h.field}>{h.sheetHeader || h.field}</th>
                     ))}
@@ -898,7 +1098,7 @@ export function SecondaryPage() {
                           <span className="inline-block w-3.5 text-center">{expanded ? '▾' : '▸'}</span>
                         </td>
                         <td className="text-[12.5px]">
-                          {viewMode === 'stockist' && g.ebsCode ? (
+                          {g.ebsCode ? (
                             <>
                               <Faint>{g.ebsCode}</Faint> — {groupName}
                             </>
@@ -941,16 +1141,7 @@ export function SecondaryPage() {
                       >
                         <td />
                         <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
-                          {viewMode === 'stockist'
-                            ? r.itemName || '—'
-                            : r.customerName
-                              ? (
-                                <>
-                                  {r.ebsCode && <><Faint>{r.ebsCode}</Faint>{' — '}</>}
-                                  {r.customerName}
-                                </>
-                              )
-                              : '—'}
+                          {r.itemName || '—'}
                         </td>
                         {numericHeaderMap.map((h) => {
                           const v = r.raw[h.field]
@@ -963,15 +1154,21 @@ export function SecondaryPage() {
                         <td />
                         <td><StatusChip state={r.state} /></td>
                         {prefs.issueHints && (
-                          <td
-                            className="max-w-70 truncate text-xs text-status-error"
-                            title={r.issues.length > 0 ? r.issues.map((i) => i.message).join('\n') : undefined}
-                          >
-                            {r.issues.length > 0
-                              ? `${r.issues[0].message}${r.issues.length > 1 ? ` (+${r.issues.length - 1})` : ''}`
-                              : r.diff.length > 0
-                                ? `${r.diff.length} field(s) differ`
-                                : ''}
+                          <td className="max-w-70 text-xs">
+                            {r.issues.length > 0 ? (
+                              <OutlineChipButton
+                                className="!border-status-error !text-status-error"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setDetailRowId(r.id)
+                                }}
+                              >
+                                {issueLabel(r.issues[0].code)}
+                                {r.issues.length > 1 && <Faint>+{r.issues.length - 1}</Faint>}
+                              </OutlineChipButton>
+                            ) : r.diff.length > 0 ? (
+                              <span className="text-status-conflict">{r.diff.length} field(s) differ</span>
+                            ) : null}
                           </td>
                         )}
                       </tr>
@@ -1029,15 +1226,21 @@ export function SecondaryPage() {
                               })}
                               <td><StatusChip state={r.state} /></td>
                               {prefs.issueHints && (
-                                <td
-                                  className="max-w-70 truncate text-xs text-status-error"
-                                  title={r.issues.length > 0 ? r.issues.map((i) => i.message).join('\n') : undefined}
-                                >
-                                  {r.issues.length > 0
-                                    ? `${r.issues[0].message}${r.issues.length > 1 ? ` (+${r.issues.length - 1})` : ''}`
-                                    : r.diff.length > 0
-                                      ? `${r.diff.length} field(s) differ`
-                                      : ''}
+                                <td className="max-w-70 text-xs">
+                                  {r.issues.length > 0 ? (
+                                    <OutlineChipButton
+                                      className="!border-status-error !text-status-error"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setDetailRowId(r.id)
+                                      }}
+                                    >
+                                      {issueLabel(r.issues[0].code)}
+                                      {r.issues.length > 1 && <Faint>+{r.issues.length - 1}</Faint>}
+                                    </OutlineChipButton>
+                                  ) : r.diff.length > 0 ? (
+                                    <span className="text-status-conflict">{r.diff.length} field(s) differ</span>
+                                  ) : null}
                                 </td>
                               )}
                             </tr>
@@ -1084,6 +1287,30 @@ export function SecondaryPage() {
           ebsCode={mapDialog.ebsCode}
           customerName={mapDialog.customerName}
           onClose={() => setMapDialog(null)}
+        />
+      )}
+
+      {roleProfileDialog && (
+        <RoleProfileDialog
+          customerName={roleProfileDialog.customerName}
+          profiles={roleProfileDialog.profiles}
+          onClose={() => setRoleProfileDialog(null)}
+        />
+      )}
+
+      {ebsCodesDialog && (
+        <EbsCodesDialog
+          customerName={ebsCodesDialog.customerName}
+          values={ebsCodesDialog.values}
+          onClose={() => setEbsCodesDialog(null)}
+        />
+      )}
+
+      {itemDepartmentsDialog && (
+        <ItemDepartmentsDialog
+          itemName={itemDepartmentsDialog.itemName}
+          departments={itemDepartmentsDialog.departments}
+          onClose={() => setItemDepartmentsDialog(null)}
         />
       )}
     </div>

@@ -7,7 +7,7 @@ import { normalizeItemName } from '../../engine/resolveItem'
 import { groupKey, resolveRegexOverride } from '../../engine/validateRow'
 import { bestFuzzyMatch } from '../../lib/fuzzyMatch'
 import { ErpApiError, ErpNextClient } from '../../lib/erpnext/client'
-import type { Credentials, CustomerProfile, ErpSecondaryDoc, MigrationRow, RegexMapEntry } from '../../types'
+import type { Credentials, CustomerProfile, ErpSecondaryDoc, ItemDepartment, MigrationRow, RegexMapEntry } from '../../types'
 
 export const DOCTYPE = 'Secondary Data Entry'
 
@@ -52,7 +52,12 @@ export async function fetchErpSnapshot(
   }
 
   const customers = new Map<string, string>()
-  for (const r of customerRecords) customers.set(normalizeItemName(r.value), r.name)
+  for (const r of customerRecords) {
+    // Same comma-separated-codes caveat as matchCustomersByEbsCode.
+    for (const code of r.value.split(',').map((v) => v.trim()).filter(Boolean)) {
+      customers.set(normalizeItemName(code), r.name)
+    }
+  }
 
   const distributors = [
     ...new Set(
@@ -355,6 +360,8 @@ export interface MasterMatchOutcome {
   matches: Map<string, MasterMatchResult>
   /** Every matched doctype's docname — the option list for the ERP dropdown, letting the user override any match. */
   options: string[]
+  /** Docname → every configured field's raw value found on that record (e.g. more than one EBS-code field on the same ERP Customer). */
+  valuesByDoc?: Map<string, string[]>
 }
 
 /** Dotted-path (Frappe convention, e.g. `"distributor.whg_ebs_code"`) → the field on the linked doctype; bare paths match on `name`. */
@@ -396,7 +403,25 @@ export async function matchCustomersByEbsCode(
   const fields = targetFieldsFrom(erpFields, ['name'])
   const records = await fetchFieldValues(client, 'Customer', fields)
   const byValue = new Map<string, string>()
-  for (const r of records) byValue.set(norm(r.value), r.name)
+  const valuesByDoc = new Map<string, string[]>()
+  for (const r of records) {
+    // A single EBS-code field can itself hold several codes as one
+    // comma-separated string (e.g. "EBS148,EBS015") — split so each code
+    // matches individually and lists separately in the UI.
+    const codes = r.value
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+    for (const code of codes) {
+      byValue.set(norm(code), r.name)
+      const existing = valuesByDoc.get(r.name)
+      if (existing) {
+        if (!existing.includes(code)) existing.push(code)
+      } else {
+        valuesByDoc.set(r.name, [code])
+      }
+    }
+  }
 
   const matches = new Map<string, MasterMatchResult>()
   for (const code of ebsCodes) {
@@ -405,7 +430,7 @@ export async function matchCustomersByEbsCode(
     matches.set(code, { erpValue: alreadyConfirmed ?? exact ?? null, suggestion: null, score: null })
   }
   const options = [...new Set(records.map((r) => r.name))].sort((a, b) => a.localeCompare(b))
-  return { matches, options }
+  return { matches, options, valuesByDoc }
 }
 
 /**
@@ -459,6 +484,37 @@ export async function matchItemsByName(
   }
   const options = [...new Set(records.map((r) => r.name))].sort((a, b) => a.localeCompare(b))
   return { matches, options }
+}
+
+/**
+ * ERP Item.custom_department_details (child table) for each matched item —
+ * the Master Data → Item table's Department chip/popup source.
+ */
+export async function fetchItemDepartments(
+  client: ErpNextClient,
+  itemDocNames: string[],
+): Promise<Map<string, ItemDepartment[]>> {
+  const out = new Map<string, ItemDepartment[]>()
+  await Promise.all(
+    [...new Set(itemDocNames)].map(async (docname) => {
+      try {
+        const doc = await client.getDoc<{
+          custom_department_details?: { elbrit_department: string; valid_from: string | null; valid_to: string | null }[]
+        }>('Item', docname)
+        out.set(
+          docname,
+          (doc.custom_department_details ?? []).map((d) => ({
+            department: d.elbrit_department,
+            validFrom: d.valid_from,
+            validTo: d.valid_to,
+          })),
+        )
+      } catch {
+        out.set(docname, [])
+      }
+    }),
+  )
+  return out
 }
 
 export type { PushGroup }

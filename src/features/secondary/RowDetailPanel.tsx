@@ -84,8 +84,9 @@ export function RowDetailPanel({
             {row.issues.map((i, n) => (
               <li
                 key={n}
-                className={`mb-1 text-[12.5px] ${i.severity === 'error' ? 'text-status-error' : 'text-status-conflict'}`}
+                className={`mb-2 text-[12.5px] ${i.severity === 'error' ? 'text-status-error' : 'text-status-conflict'}`}
               >
+                <div className="mono text-[10.5px] tracking-wide text-text-faint">{i.code}</div>
                 {i.message}
               </li>
             ))}

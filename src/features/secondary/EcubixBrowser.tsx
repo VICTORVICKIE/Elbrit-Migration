@@ -75,6 +75,15 @@ function fmtCurrency(n: number): string {
   return `₹${fmt(n)}`
 }
 
+type ValueCardKey = 'secondaryValue' | 'secondaryQty' | 'closingValue' | 'closingQty'
+
+const VALUE_CARDS: { key: ValueCardKey; label: string; isCurrency: boolean }[] = [
+  { key: 'secondaryValue', label: 'Secondary value', isCurrency: true },
+  { key: 'secondaryQty', label: 'Secondary qty', isCurrency: false },
+  { key: 'closingValue', label: 'Closing value', isCurrency: true },
+  { key: 'closingQty', label: 'Closing qty', isCurrency: false },
+]
+
 function monthLabel(monthKey: string): string {
   const d = new Date(`${monthKey.slice(0, 4)}-${monthKey.slice(4, 6)}-01`)
   return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
@@ -154,7 +163,7 @@ export function EcubixBrowser() {
   const [reconciliation, setReconciliation] = useState<Map<string, LeafReconciliation>>(new Map())
   const [reconciling, setReconciling] = useState(false)
   const reconcileRequested = useRef<Set<string>>(new Set())
-  const [expandedValueCard, setExpandedValueCard] = useState<'secondary' | 'closing' | null>(null)
+  const [expandedValueCard, setExpandedValueCard] = useState<ValueCardKey | null>(null)
 
   // Per-month view — exactly one month is always in scope, picked from the
   // dropdown below (no "All months"). Department/HQ stay independent facets
@@ -571,13 +580,27 @@ export function EcubixBrowser() {
   )
   const hqBadges = new Map(hqOptions.map((h) => [h.value, badgeFor(leaves.filter((l) => l.hq === h.value))]))
 
-  /** Department → HQ breakdown of sheet/ERP values, for the reconciliation drill-down — only leaves already checked. */
-  function valueBreakdown(field: 'secondary' | 'closing') {
+  /** Department → HQ breakdown of sheet/ERP values (or qty), for the reconciliation drill-down — only leaves already checked. */
+  function valueBreakdown(field: ValueCardKey) {
     const groups = new Map<string, { hq: string; sheet: number; erp: number }[]>()
     for (const l of filteredComputed) {
       const r = reconciliation.get(reconciliationKey(l))!
-      const sheet = field === 'secondary' ? r.sheetSalesValue : r.sheetClosingValue
-      const erpVal = field === 'secondary' ? r.erpSalesValue : r.erpClosingValue
+      const sheet =
+        field === 'secondaryValue'
+          ? r.sheetSalesValue
+          : field === 'secondaryQty'
+            ? r.sheetSalesQty
+            : field === 'closingValue'
+              ? r.sheetClosingValue
+              : r.sheetClosingQty
+      const erpVal =
+        field === 'secondaryValue'
+          ? r.erpSalesValue
+          : field === 'secondaryQty'
+            ? r.erpSalesQty
+            : field === 'closingValue'
+              ? r.erpClosingValue
+              : r.erpClosingQty
       const rows = groups.get(l.department) ?? []
       rows.push({ hq: l.hq.replace(/^HQ-/i, ''), sheet, erp: erpVal })
       groups.set(l.department, rows)
@@ -812,31 +835,43 @@ export function EcubixBrowser() {
                 <div className="px-4.5 pt-1 pb-2 text-[10px] font-bold tracking-[0.06em] text-text-faint">
                   VALUE RECONCILIATION · ECUBIX vs ERPNEXT
                 </div>
-                <div className="grid grid-cols-1 gap-3 px-4.5 pb-4.5 sm:grid-cols-2">
-                  {(
-                    [
-                      { key: 'secondary' as const, label: 'Secondary value', sheet: scopeReconciliation.sheetSalesValue, erp: scopeReconciliation.erpSalesValue },
-                      { key: 'closing' as const, label: 'Closing value', sheet: scopeReconciliation.sheetClosingValue, erp: scopeReconciliation.erpClosingValue },
-                    ]
-                  ).map((v) => {
-                    const diff = Math.abs(v.sheet - v.erp)
+                <div className="grid grid-cols-1 gap-3 px-4.5 pb-4.5 sm:grid-cols-2 lg:grid-cols-4">
+                  {VALUE_CARDS.map((c) => {
+                    const sheet =
+                      c.key === 'secondaryValue'
+                        ? scopeReconciliation.sheetSalesValue
+                        : c.key === 'secondaryQty'
+                          ? scopeReconciliation.sheetSalesQty
+                          : c.key === 'closingValue'
+                            ? scopeReconciliation.sheetClosingValue
+                            : scopeReconciliation.sheetClosingQty
+                    const erp =
+                      c.key === 'secondaryValue'
+                        ? scopeReconciliation.erpSalesValue
+                        : c.key === 'secondaryQty'
+                          ? scopeReconciliation.erpSalesQty
+                          : c.key === 'closingValue'
+                            ? scopeReconciliation.erpClosingValue
+                            : scopeReconciliation.erpClosingQty
+                    const format = c.isCurrency ? fmtCurrency : fmt
+                    const diff = Math.abs(sheet - erp)
                     return (
                       <button
-                        key={v.key}
+                        key={c.key}
                         type="button"
                         className="cursor-pointer rounded-lg border border-border p-3.5 text-left hover:border-border-strong"
-                        onClick={() => setExpandedValueCard(v.key)}
+                        onClick={() => setExpandedValueCard(c.key)}
                       >
-                        <div className="text-[11px] font-bold tracking-[0.04em] text-text-muted">{v.label.toUpperCase()}</div>
+                        <div className="text-[11px] font-bold tracking-[0.04em] text-text-muted">{c.label.toUpperCase()}</div>
                         <div className="mt-2 flex items-baseline gap-4">
                           <div>
                             <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">ECUBIX</div>
-                            <div className="text-[17px] font-bold">{fmtCurrency(v.sheet)}</div>
+                            <div className="text-[17px] font-bold">{format(sheet)}</div>
                           </div>
                           <div className="text-[15px] text-border-strong">→</div>
                           <div>
                             <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">ERPNEXT</div>
-                            <div className="text-[17px] font-bold">{fmtCurrency(v.erp)}</div>
+                            <div className="text-[17px] font-bold">{format(erp)}</div>
                           </div>
                           <div className="ml-auto text-right">
                             <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">DIFF</div>
@@ -846,7 +881,7 @@ export function EcubixBrowser() {
                                 diff > 0 ? 'bg-status-error-bg text-status-error' : 'bg-status-synced-bg text-status-synced',
                               )}
                             >
-                              {fmtCurrency(diff)}
+                              {format(diff)}
                             </span>
                           </div>
                         </div>
@@ -868,9 +903,13 @@ export function EcubixBrowser() {
           field={expandedValueCard}
           monthLabelText={selectedMonth ? monthLabel(selectedMonth) : ''}
           total={
-            expandedValueCard === 'secondary'
+            expandedValueCard === 'secondaryValue'
               ? { sheet: scopeReconciliation.sheetSalesValue, erp: scopeReconciliation.erpSalesValue }
-              : { sheet: scopeReconciliation.sheetClosingValue, erp: scopeReconciliation.erpClosingValue }
+              : expandedValueCard === 'secondaryQty'
+                ? { sheet: scopeReconciliation.sheetSalesQty, erp: scopeReconciliation.erpSalesQty }
+                : expandedValueCard === 'closingValue'
+                  ? { sheet: scopeReconciliation.sheetClosingValue, erp: scopeReconciliation.erpClosingValue }
+                  : { sheet: scopeReconciliation.sheetClosingQty, erp: scopeReconciliation.erpClosingQty }
           }
           groups={valueBreakdown(expandedValueCard)}
           onClose={() => setExpandedValueCard(null)}
@@ -880,7 +919,17 @@ export function EcubixBrowser() {
   )
 }
 
-function DiffCell({ sheet, erp, size = 'sm' }: { sheet: number; erp: number; size?: 'sm' | 'lg' }) {
+function DiffCell({
+  sheet,
+  erp,
+  size = 'sm',
+  format = fmtCurrency,
+}: {
+  sheet: number
+  erp: number
+  size?: 'sm' | 'lg'
+  format?: (n: number) => string
+}) {
   const diff = Math.abs(sheet - erp)
   const matched = diff === 0
   return (
@@ -891,7 +940,7 @@ function DiffCell({ sheet, erp, size = 'sm' }: { sheet: number; erp: number; siz
         matched ? 'bg-status-synced-bg text-status-synced' : 'bg-status-error-bg text-status-error',
       )}
     >
-      {matched ? 'Matched' : fmtCurrency(diff)}
+      {matched ? 'Matched' : format(diff)}
     </span>
   )
 }
@@ -903,13 +952,14 @@ function ValueBreakdownDialog({
   groups,
   onClose,
 }: {
-  field: 'secondary' | 'closing'
+  field: ValueCardKey
   monthLabelText: string
   total: { sheet: number; erp: number }
   groups: [string, { hq: string; sheet: number; erp: number }[]][]
   onClose: () => void
 }) {
-  const label = field === 'secondary' ? 'Secondary value' : 'Closing value'
+  const card = VALUE_CARDS.find((c) => c.key === field)!
+  const format = card.isCurrency ? fmtCurrency : fmt
 
   return (
     <DialogRoot open onOpenChange={(open) => !open && onClose()}>
@@ -917,7 +967,7 @@ function ValueBreakdownDialog({
         <div className="flex items-center gap-2.5 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
             <DialogTitle className="mb-0 text-[15px]">
-              {label} · {monthLabelText}
+              {card.label} · {monthLabelText}
             </DialogTitle>
             <div className="mt-0.5 text-xs text-text-muted">Ecubix vs ERPNext, broken down by department → HQ</div>
           </div>
@@ -942,10 +992,10 @@ function ValueBreakdownDialog({
               <div key={department}>
                 <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center gap-2 border-b border-border bg-bg py-2.5 pr-5 pl-4 text-[12.5px]">
                   <div className="truncate font-bold">{department}</div>
-                  <div className="text-right font-mono tabular-nums">{fmtCurrency(deptTotal.sheet)}</div>
-                  <div className="text-right font-mono tabular-nums">{fmtCurrency(deptTotal.erp)}</div>
+                  <div className="text-right font-mono tabular-nums">{format(deptTotal.sheet)}</div>
+                  <div className="text-right font-mono tabular-nums">{format(deptTotal.erp)}</div>
                   <div className="text-right">
-                    <DiffCell sheet={deptTotal.sheet} erp={deptTotal.erp} />
+                    <DiffCell sheet={deptTotal.sheet} erp={deptTotal.erp} format={format} />
                   </div>
                 </div>
                 {hqs.map((h) => (
@@ -954,10 +1004,10 @@ function ValueBreakdownDialog({
                     className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center gap-2 border-b border-border py-2.5 pr-5 pl-9 text-[12.5px]"
                   >
                     <div className="truncate">{h.hq}</div>
-                    <div className="text-right font-mono tabular-nums">{fmtCurrency(h.sheet)}</div>
-                    <div className="text-right font-mono tabular-nums">{fmtCurrency(h.erp)}</div>
+                    <div className="text-right font-mono tabular-nums">{format(h.sheet)}</div>
+                    <div className="text-right font-mono tabular-nums">{format(h.erp)}</div>
                     <div className="text-right">
-                      <DiffCell sheet={h.sheet} erp={h.erp} />
+                      <DiffCell sheet={h.sheet} erp={h.erp} format={format} />
                     </div>
                   </div>
                 ))}
@@ -968,10 +1018,10 @@ function ValueBreakdownDialog({
 
         <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center gap-2 border-t border-border bg-bg px-5 py-3.5 text-[13px] font-bold">
           <div>Total</div>
-          <div className="text-right font-mono tabular-nums">{fmtCurrency(total.sheet)}</div>
-          <div className="text-right font-mono tabular-nums">{fmtCurrency(total.erp)}</div>
+          <div className="text-right font-mono tabular-nums">{format(total.sheet)}</div>
+          <div className="text-right font-mono tabular-nums">{format(total.erp)}</div>
           <div className="text-right">
-            <DiffCell sheet={total.sheet} erp={total.erp} size="lg" />
+            <DiffCell sheet={total.sheet} erp={total.erp} size="lg" format={format} />
           </div>
         </div>
       </DialogPopup>

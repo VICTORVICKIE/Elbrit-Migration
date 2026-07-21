@@ -41,5 +41,12 @@ export function ButtonLink({
   render,
   ...props
 }: BaseButtonProps & { render: ReactElement }) {
-  return <BaseButton render={render} className={cn(base, sizes[size], variants[variant], className)} {...props} />
+  return (
+    <BaseButton
+      nativeButton={false}
+      render={render}
+      className={cn(base, sizes[size], variants[variant], className)}
+      {...props}
+    />
+  )
 }

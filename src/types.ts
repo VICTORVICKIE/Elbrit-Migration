@@ -178,6 +178,13 @@ export interface CustomerProfile {
   hq: string // Territory
 }
 
+/** One row of an ERP Item's custom_department_details child table. */
+export interface ItemDepartment {
+  department: string // elbrit_department
+  validFrom: string | null
+  validTo: string | null
+}
+
 export interface Credentials {
   erpnext: { baseUrl: string; apiKey: string; apiSecret: string }
 }

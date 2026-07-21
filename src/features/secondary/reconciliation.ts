@@ -40,6 +40,10 @@ export interface LeafReconciliation {
   erpSalesValue: number
   sheetClosingValue: number
   erpClosingValue: number
+  sheetSalesQty: number
+  erpSalesQty: number
+  sheetClosingQty: number
+  erpClosingQty: number
   matchedEqualValue: number
 }
 
@@ -54,6 +58,10 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
   let erpSalesValue = 0
   let sheetClosingValue = 0
   let erpClosingValue = 0
+  let sheetSalesQty = 0
+  let erpSalesQty = 0
+  let sheetClosingQty = 0
+  let erpClosingQty = 0
   let matchedEqualValue = 0
 
   for (const r of rows) {
@@ -70,6 +78,8 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
 
     sheetSalesValue += r.values.sales_value ?? 0
     sheetClosingValue += r.values.closing_balance ?? 0
+    sheetSalesQty += r.values.sales_qty ?? 0
+    sheetClosingQty += r.values.closing_qty ?? 0
     const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
     const line = doc && r.resolved.item
       ? doc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(r.resolved.item!))
@@ -77,6 +87,8 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
     if (line) {
       erpSalesValue += line.sales_value ?? 0
       erpClosingValue += line.closing_balance ?? 0
+      erpSalesQty += line.sales_qty ?? 0
+      erpClosingQty += line.closing_qty ?? 0
       if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
     }
   }
@@ -93,6 +105,10 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
     erpSalesValue,
     sheetClosingValue,
     erpClosingValue,
+    sheetSalesQty,
+    erpSalesQty,
+    sheetClosingQty,
+    erpClosingQty,
     matchedEqualValue,
   }
 }
@@ -110,6 +126,10 @@ export function sumReconciliation(list: LeafReconciliation[]): LeafReconciliatio
     erpSalesValue: 0,
     sheetClosingValue: 0,
     erpClosingValue: 0,
+    sheetSalesQty: 0,
+    erpSalesQty: 0,
+    sheetClosingQty: 0,
+    erpClosingQty: 0,
     matchedEqualValue: 0,
   }
   for (const r of list) {
@@ -124,6 +144,10 @@ export function sumReconciliation(list: LeafReconciliation[]): LeafReconciliatio
     out.erpSalesValue += r.erpSalesValue
     out.sheetClosingValue += r.sheetClosingValue
     out.erpClosingValue += r.erpClosingValue
+    out.sheetSalesQty += r.sheetSalesQty
+    out.erpSalesQty += r.erpSalesQty
+    out.sheetClosingQty += r.sheetClosingQty
+    out.erpClosingQty += r.erpClosingQty
     out.matchedEqualValue += r.matchedEqualValue
   }
   return out
