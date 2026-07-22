@@ -11,7 +11,7 @@ export interface PushGroup {
 
 /**
  * Group pushable rows into one ERP payload per (distributor, date).
- * Pushable: new, or matched/conflict resolved as use-sheet with a non-empty diff.
+ * Pushable: new, or matched/conflict resolved as use-ecubix with a non-empty diff.
  */
 export function buildPushGroups(rows: MigrationRow[]): PushGroup[] {
   const groups = new Map<string, PushGroup>()
@@ -19,7 +19,7 @@ export function buildPushGroups(rows: MigrationRow[]): PushGroup[] {
     const pushable =
       row.state === 'new' ||
       (row.state === 'matched' && row.diff.length > 0) ||
-      (row.state === 'conflict' && row.resolution === 'use-sheet')
+      (row.state === 'conflict' && row.resolution === 'use-ecubix')
     if (!pushable) continue
     if (!row.resolved.distributor || !row.resolved.item) continue
 
@@ -41,7 +41,7 @@ export function buildPushGroups(rows: MigrationRow[]): PushGroup[] {
   return [...groups.values()]
 }
 
-/** Sheet-owns-doc policy: the payload's items are exactly the sheet's rows for that group. */
+/** Ecubix-owns-doc policy: the payload's items are exactly Ecubix's rows for that group. */
 export function buildDocPayload(group: PushGroup): {
   distributor: string
   date: string
@@ -52,8 +52,6 @@ export function buildDocPayload(group: PushGroup): {
     date: group.date,
     items: group.rows.map((r) => ({
       item: r.resolved.item!,
-      primary_sales: r.values.primary_sales,
-      rate: r.values.rate,
       sales_qty: r.values.sales_qty,
       sales_value: r.values.sales_value,
       closing_qty: r.values.closing_qty,

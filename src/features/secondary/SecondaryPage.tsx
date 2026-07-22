@@ -56,7 +56,7 @@ function fmtCurrency(n: number): string {
 
 // Per-field ERP value for a row: 'new' rows have no ERP record at all;
 // otherwise a diff entry means the field mismatched (use its recorded erp
-// value), and absence of a diff entry means the field matched (same as sheet).
+// value), and absence of a diff entry means the field matched (same as Ecubix).
 function erpValueFor(r: MigrationRow, field: string): string | number | null | undefined {
   if (r.state === 'new') return undefined
   const d = r.diff.find((d) => d.field === field)
@@ -183,7 +183,7 @@ export function SecondaryPage() {
   )
 
   const mappedHeaderMap = useMemo(
-    () => secondaryConfig.headerMap.filter((h) => h.sheetHeader.trim()),
+    () => secondaryConfig.headerMap.filter((h) => h.ecubixHeader.trim()),
     [secondaryConfig.headerMap],
   )
 
@@ -209,18 +209,29 @@ export function SecondaryPage() {
         issueCount: number
         rows: MigrationRow[]
         ebsCode?: string
+        erpCounted: Set<string>
       }
     >()
     for (const r of visible) {
       const key = r.customerName || '—'
       const g =
-        groups.get(key) ?? { count: 0, sums: {}, erpSums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined }
+        groups.get(key) ??
+        { count: 0, sums: {}, erpSums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined, erpCounted: new Set() }
       g.count++
+      // Two Ecubix rows for the same item resolve to the same ERP item line
+      // (diffRow matches by item name, not by Ecubix row) — so the ERP side
+      // must only be counted once per distinct item, or it gets multiplied
+      // by however many Ecubix rows share that item.
+      const erpKey = `${r.resolved.item ?? r.itemName}|${r.resolved.date}`
+      const alreadyCountedErp = g.erpCounted.has(erpKey)
+      if (!alreadyCountedErp) g.erpCounted.add(erpKey)
       for (const h of numericHeaderMap) {
         const v = r.raw[h.field]
         if (typeof v === 'number') g.sums[h.field] = (g.sums[h.field] ?? 0) + v
-        const erpV = erpValueFor(r, h.field)
-        if (typeof erpV === 'number') g.erpSums[h.field] = (g.erpSums[h.field] ?? 0) + erpV
+        if (!alreadyCountedErp) {
+          const erpV = erpValueFor(r, h.field)
+          if (typeof erpV === 'number') g.erpSums[h.field] = (g.erpSums[h.field] ?? 0) + erpV
+        }
       }
       g.states[r.state] = (g.states[r.state] ?? 0) + 1
       g.issueCount += r.issues.length > 0 ? r.issues.length : r.diff.length
@@ -422,7 +433,7 @@ export function SecondaryPage() {
     setConfirmingItem(null)
   }
 
-  // KPI strip — sheet-vs-ERP comparison. Value fields are summed sheet-side
+  // KPI strip — Ecubix-vs-ERP comparison. Value fields are summed Ecubix-side
   // (row.values) and ERP-side (the matching ErpSecondaryDoc item line, found
   // the same way diffRow does), so "diff" here means the same thing it does
   // in the per-row Status/Issues column.
@@ -430,30 +441,38 @@ export function SecondaryPage() {
     const counts = countRows(rows)
     const customersMapped = customerRows.filter((c) => customerMatches.get(c.ebsCode)?.erpValue).length
     const itemsMapped = itemRows.filter((n) => itemMatches.get(n)?.erpValue).length
-    let sheetSalesValue = 0
+    let ecubixSalesValue = 0
     let erpSalesValue = 0
-    let sheetClosingValue = 0
+    let ecubixClosingValue = 0
     let erpClosingValue = 0
-    let sheetSalesQty = 0
+    let ecubixSalesQty = 0
     let erpSalesQty = 0
-    let sheetClosingQty = 0
+    let ecubixClosingQty = 0
     let erpClosingQty = 0
     let matchedEqualValue = 0
+    // Two Ecubix rows for the same distributor+date+item resolve to the same
+    // ERP item line — count that line's values only once, or the ERP-side
+    // total gets multiplied by however many Ecubix rows share it.
+    const erpCounted = new Set<string>()
     for (const r of rows) {
-      sheetSalesValue += r.values.sales_value ?? 0
-      sheetClosingValue += r.values.closing_balance ?? 0
-      sheetSalesQty += r.values.sales_qty ?? 0
-      sheetClosingQty += r.values.closing_qty ?? 0
+      ecubixSalesValue += r.values.sales_value ?? 0
+      ecubixClosingValue += r.values.closing_balance ?? 0
+      ecubixSalesQty += r.values.sales_qty ?? 0
+      ecubixClosingQty += r.values.closing_qty ?? 0
       const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
       const line = doc && r.resolved.item
         ? doc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(r.resolved.item!))
         : undefined
       if (line) {
-        erpSalesValue += line.sales_value ?? 0
-        erpClosingValue += line.closing_balance ?? 0
-        erpSalesQty += line.sales_qty ?? 0
-        erpClosingQty += line.closing_qty ?? 0
         if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
+        const erpKey = `${r.resolved.distributor}|${r.resolved.date}|${r.resolved.item}`
+        if (!erpCounted.has(erpKey)) {
+          erpCounted.add(erpKey)
+          erpSalesValue += line.sales_value ?? 0
+          erpClosingValue += line.closing_balance ?? 0
+          erpSalesQty += line.sales_qty ?? 0
+          erpClosingQty += line.closing_qty ?? 0
+        }
       }
     }
     return {
@@ -462,16 +481,16 @@ export function SecondaryPage() {
       customersMapped,
       itemsUnmapped: itemRows.length - itemsMapped,
       customersUnmapped: customerRows.length - customersMapped,
-      sheetSalesValue,
+      ecubixSalesValue,
       erpSalesValue,
-      sheetClosingValue,
+      ecubixClosingValue,
       erpClosingValue,
-      sheetSalesQty,
+      ecubixSalesQty,
       erpSalesQty,
-      sheetClosingQty,
+      ecubixClosingQty,
       erpClosingQty,
       matchedEqualValue,
-      matchedPct: sheetSalesValue > 0 ? Math.round((matchedEqualValue / sheetSalesValue) * 100) : 0,
+      matchedPct: ecubixSalesValue > 0 ? Math.round((matchedEqualValue / ecubixSalesValue) * 100) : 0,
       masterDataPending: customerMatchesPending || itemMatchesPending,
     }
   }, [rows, customerRows, customerMatches, itemRows, itemMatches, erpExisting, customerMatchesPending, itemMatchesPending])
@@ -504,18 +523,18 @@ export function SecondaryPage() {
     setSelected(new Set())
   }
 
-  /** Bulk version of RowDetailPanel's "Use sheet values" conflict resolution. */
-  async function bulkUseSheet() {
+  /** Bulk version of RowDetailPanel's "Use Ecubix values" conflict resolution. */
+  async function bulkUseEcubix() {
     const targets = rows.filter((r) => selected.has(r.id) && r.state === 'conflict')
     if (targets.length === 0) return
-    await updateRows(targets.map((r) => ({ ...r, resolution: 'use-sheet' as const, state: 'matched' as const })))
+    await updateRows(targets.map((r) => ({ ...r, resolution: 'use-ecubix' as const, state: 'matched' as const })))
     setSelected(new Set())
   }
 
   /**
    * Push only the selected rows — but expanded to every row sharing a
    * distributor|date group with a selected row. buildDocPayload replaces a
-   * doc's item list wholesale (sheet-owns-doc policy), so pushing a partial
+   * doc's item list wholesale (Ecubix-owns-doc policy), so pushing a partial
    * group would silently drop that doc's other items.
    */
   async function bulkPush() {
@@ -581,7 +600,7 @@ export function SecondaryPage() {
     return (
       <div>
         <Muted>Batch not found.</Muted>
-        <Link href="/secondary">← Pick a sheet</Link>
+        <Link href="/secondary">← Pick an Ecubix batch</Link>
       </div>
     )
   }
@@ -602,7 +621,7 @@ export function SecondaryPage() {
         title="Secondary · check & fix"
         subtitle={
           <>
-            <span className="mono block text-xs">{batch.fileName}</span>
+            <span className="mono block text-xs">{batch.label}</span>
             <span className="mt-2 flex gap-2">
               <span className="rounded-full border border-accent bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-text">
                 {batch.department}
@@ -620,7 +639,7 @@ export function SecondaryPage() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => router.push('/secondary')}>↩ Sheets</Button>
+            <Button onClick={() => router.push('/secondary')}>↩ Ecubix</Button>
             <Button disabled={validating} onClick={() => void runValidate()}>
               {validating ? 'Validating…' : 'Validate'}
             </Button>
@@ -640,7 +659,7 @@ export function SecondaryPage() {
         </Card>
       )}
 
-      {/* KPI STRIP — sheet vs ERP, at a glance */}
+      {/* KPI STRIP — Ecubix vs ERP, at a glance */}
       <div className="mb-2.5 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2.5">
         <StatTile label="Total rows" value={kpis.counts.total} sub={`${monthLabel} · ${batch.hq || batch.department}`} />
         <StatTile
@@ -664,7 +683,7 @@ export function SecondaryPage() {
           label="Conflicts"
           value={kpis.counts.conflict}
           valueClassName={kpis.counts.conflict > 0 ? 'text-status-conflict' : 'text-text-faint'}
-          sub="sheet vs ERP"
+          sub="Ecubix vs ERP"
         />
         <StatTile
           label="Master issues"
@@ -690,32 +709,32 @@ export function SecondaryPage() {
         />
       </div>
 
-      {/* VALUE RECONCILIATION — sheet (Ecubix) vs ERPNext, qty + value */}
+      {/* VALUE RECONCILIATION — Ecubix vs ERPNext, qty + value */}
       <SectionLabel className="mb-2 block">Value reconciliation · ECUBIX vs ERPNext</SectionLabel>
       <div className="mb-5.5 grid grid-cols-4 gap-2.5">
         <StatTile
           label="Secondary qty"
-          value={fmt(kpis.sheetSalesQty)}
-          sub={`ERP ${fmt(kpis.erpSalesQty)} · diff ${fmt(Math.abs(kpis.sheetSalesQty - kpis.erpSalesQty))}`}
-          subClassName={kpis.sheetSalesQty !== kpis.erpSalesQty ? 'text-status-error' : 'text-status-synced'}
+          value={fmt(kpis.ecubixSalesQty)}
+          sub={`ERP ${fmt(kpis.erpSalesQty)} · diff ${fmt(Math.abs(kpis.ecubixSalesQty - kpis.erpSalesQty))}`}
+          subClassName={kpis.ecubixSalesQty !== kpis.erpSalesQty ? 'text-status-error' : 'text-status-synced'}
         />
         <StatTile
           label="Secondary value"
-          value={fmtCurrency(kpis.sheetSalesValue)}
-          sub={`ERP ${fmtCurrency(kpis.erpSalesValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetSalesValue - kpis.erpSalesValue))}`}
-          subClassName={kpis.sheetSalesValue !== kpis.erpSalesValue ? 'text-status-error' : 'text-status-synced'}
+          value={fmtCurrency(kpis.ecubixSalesValue)}
+          sub={`ERP ${fmtCurrency(kpis.erpSalesValue)} · diff ${fmtCurrency(Math.abs(kpis.ecubixSalesValue - kpis.erpSalesValue))}`}
+          subClassName={kpis.ecubixSalesValue !== kpis.erpSalesValue ? 'text-status-error' : 'text-status-synced'}
         />
         <StatTile
           label="Closing qty"
-          value={fmt(kpis.sheetClosingQty)}
-          sub={`ERP ${fmt(kpis.erpClosingQty)} · diff ${fmt(Math.abs(kpis.sheetClosingQty - kpis.erpClosingQty))}`}
-          subClassName={kpis.sheetClosingQty !== kpis.erpClosingQty ? 'text-status-error' : 'text-status-synced'}
+          value={fmt(kpis.ecubixClosingQty)}
+          sub={`ERP ${fmt(kpis.erpClosingQty)} · diff ${fmt(Math.abs(kpis.ecubixClosingQty - kpis.erpClosingQty))}`}
+          subClassName={kpis.ecubixClosingQty !== kpis.erpClosingQty ? 'text-status-error' : 'text-status-synced'}
         />
         <StatTile
           label="Closing value"
-          value={fmtCurrency(kpis.sheetClosingValue)}
-          sub={`ERP ${fmtCurrency(kpis.erpClosingValue)} · diff ${fmtCurrency(Math.abs(kpis.sheetClosingValue - kpis.erpClosingValue))}`}
-          subClassName={kpis.sheetClosingValue !== kpis.erpClosingValue ? 'text-status-error' : 'text-status-synced'}
+          value={fmtCurrency(kpis.ecubixClosingValue)}
+          sub={`ERP ${fmtCurrency(kpis.erpClosingValue)} · diff ${fmtCurrency(Math.abs(kpis.ecubixClosingValue - kpis.erpClosingValue))}`}
+          subClassName={kpis.ecubixClosingValue !== kpis.erpClosingValue ? 'text-status-error' : 'text-status-synced'}
         />
       </div>
 
@@ -1060,7 +1079,7 @@ export function SecondaryPage() {
           <Button size="sm" onClick={() => void bulkSkip()}>Skip</Button>
           <Button size="sm" onClick={() => void bulkUnskip()}>Un-skip</Button>
           <Button size="sm" onClick={() => void bulkMarkSynced()}>Mark synced</Button>
-          <Button size="sm" onClick={() => void bulkUseSheet()}>Use sheet</Button>
+          <Button size="sm" onClick={() => void bulkUseEcubix()}>Use Ecubix</Button>
           <Button
             size="sm"
             variant="primary"
@@ -1087,7 +1106,7 @@ export function SecondaryPage() {
                         colSpan={2}
                         className={cn('border-l border-border text-center', h.field === 'closing_balance' && 'border-r')}
                       >
-                        {h.sheetHeader || h.field}
+                        {h.ecubixHeader || h.field}
                       </th>
                     ))}
                     <th rowSpan={2}>Rows</th>
@@ -1124,11 +1143,11 @@ export function SecondaryPage() {
                           colSpan={2}
                           className={cn('border-l border-border text-center', h.field === 'closing_balance' && 'border-r')}
                         >
-                          {h.sheetHeader || h.field}
+                          {h.ecubixHeader || h.field}
                         </th>
                       ) : (
                         <th key={h.field} rowSpan={2}>
-                          {h.sheetHeader || h.field}
+                          {h.ecubixHeader || h.field}
                         </th>
                       )
                     })}
@@ -1206,57 +1225,90 @@ export function SecondaryPage() {
                       </tr>
                     )
                     if (!expanded) return [groupTr]
-                    const detailRows = g.rows.map((r) => (
-                      <tr
-                        key={r.id}
-                        className={cn('clickable', detailRowId === r.id && 'row-selected')}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDetailRowId(r.id === detailRowId ? null : r.id)
-                        }}
-                      >
-                        <td />
-                        <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
-                          {r.itemName || '—'}
-                        </td>
-                        {numericHeaderMap.map((h) => {
-                          const v = r.raw[h.field]
-                          return (
+                    const itemGroups = new Map<
+                      string,
+                      { itemName: string; sums: Record<string, number>; erpSums: Record<string, number>; states: Partial<Record<RowState, number>>; issueCount: number; rows: MigrationRow[] }
+                    >()
+                    for (const r of g.rows) {
+                      const key = normalizeItemName(r.itemName || '') || r.itemName || '—'
+                      const isFirstForItem = !itemGroups.has(key)
+                      const ig =
+                        itemGroups.get(key) ?? { itemName: r.itemName || '—', sums: {}, erpSums: {}, states: {}, issueCount: 0, rows: [] }
+                      for (const h of numericHeaderMap) {
+                        const v = r.raw[h.field]
+                        if (typeof v === 'number') ig.sums[h.field] = (ig.sums[h.field] ?? 0) + v
+                        // All rows sharing an item resolve to the same ERP item
+                        // line, so only take the ERP value from the first one —
+                        // summing it per row would multiply it by the row count.
+                        if (isFirstForItem) {
+                          const erpV = erpValueFor(r, h.field)
+                          if (typeof erpV === 'number') ig.erpSums[h.field] = erpV
+                        }
+                      }
+                      ig.states[r.state] = (ig.states[r.state] ?? 0) + 1
+                      ig.issueCount += r.issues.length > 0 ? r.issues.length : r.diff.length
+                      ig.rows.push(r)
+                      itemGroups.set(key, ig)
+                    }
+                    const detailRows = [...itemGroups.values()].map((ig) => {
+                      const r = ig.rows[0]
+                      const merged = ig.rows.length > 1
+                      return (
+                        <tr
+                          key={merged ? `${groupName}::${ig.itemName}` : r.id}
+                          className={cn('clickable', !merged && detailRowId === r.id && 'row-selected')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDetailRowId(r.id === detailRowId ? null : r.id)
+                          }}
+                        >
+                          <td />
+                          <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
+                            {ig.itemName}
+                          </td>
+                          {numericHeaderMap.map((h) => (
                             <Fragment key={h.field}>
-                              <td className="border-l border-border text-[12.5px]">{typeof v === 'number' ? fmt(v) : '—'}</td>
+                              <td className="border-l border-border text-[12.5px]">{fmt(ig.sums[h.field] ?? null)}</td>
                               <td
                                 className={cn(
                                   'text-[12.5px] text-text-muted',
                                   h.field === 'closing_balance' && 'border-r border-border',
                                 )}
                               >
-                                {fmtCell(erpValueFor(r, h.field))}
+                                {fmt(ig.erpSums[h.field] ?? null)}
                               </td>
                             </Fragment>
-                          )
-                        })}
-                        <td />
-                        <td><StatusChip state={r.state} /></td>
-                        {prefs.issueHints && (
-                          <td className="max-w-70 text-xs">
-                            {r.issues.length > 0 ? (
-                              <OutlineChipButton
-                                className="!border-status-error !text-status-error"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setDetailRowId(r.id)
-                                }}
-                              >
-                                {issueLabel(r.issues[0].code)}
-                                {r.issues.length > 1 && <Faint>+{r.issues.length - 1}</Faint>}
-                              </OutlineChipButton>
-                            ) : r.diff.length > 0 ? (
-                              <span className="text-status-conflict">{r.diff.length} field(s) differ</span>
-                            ) : null}
+                          ))}
+                          <td className="text-[12.5px] text-text-faint">{merged ? ig.rows.length : ''}</td>
+                          <td>
+                            <span className="flex flex-wrap gap-1">
+                              {(Object.entries(ig.states) as [RowState, number][]).map(([state, n]) => (
+                                <span key={state} className="inline-flex items-center gap-1">
+                                  <StatusChip state={state} />
+                                  {merged && <Faint className="text-[11px]">×{n}</Faint>}
+                                </span>
+                              ))}
+                            </span>
                           </td>
-                        )}
-                      </tr>
-                    ))
+                          {prefs.issueHints && (
+                            <td className="max-w-70 text-xs">
+                              {ig.issueCount > 0 && (
+                                <OutlineChipButton
+                                  className="!border-status-error !text-status-error"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setDetailRowId(r.id)
+                                  }}
+                                >
+                                  {issueLabel(r.issues[0]?.code ?? ig.rows.find((x) => x.issues.length > 0)?.issues[0].code ?? '')}
+                                  {ig.issueCount > 1 && <Faint>+{ig.issueCount - 1}</Faint>}
+                                </OutlineChipButton>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    })
                     return [groupTr, ...detailRows]
                   })
                 : (() => {

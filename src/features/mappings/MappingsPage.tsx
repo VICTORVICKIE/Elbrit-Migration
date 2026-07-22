@@ -55,7 +55,7 @@ function CustomerMappingTab() {
     })),
   )
 
-  const [sheetValue, setSheetValue] = useState('')
+  const [ecubixValue, setEcubixValue] = useState('')
   const [erpValue, setErpValue] = useState('')
   const [comment, setComment] = useState('')
   const [saving, setSaving] = useState(false)
@@ -65,7 +65,7 @@ function CustomerMappingTab() {
     () =>
       masterMap
         .filter((m) => m.field === 'distributor')
-        .sort((a, b) => a.sheetValue.localeCompare(b.sheetValue)),
+        .sort((a, b) => a.ecubixValue.localeCompare(b.ecubixValue)),
     [masterMap],
   )
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -79,9 +79,9 @@ function CustomerMappingTab() {
 
   async function add() {
     setSaving(true)
-    await confirmMasterMatch('distributor', sheetValue.trim(), erpValue.trim(), 'manual', comment.trim())
+    await confirmMasterMatch('distributor', ecubixValue.trim(), erpValue.trim(), 'manual', comment.trim())
     setSaving(false)
-    setSheetValue('')
+    setEcubixValue('')
     setErpValue('')
     setComment('')
   }
@@ -96,7 +96,7 @@ function CustomerMappingTab() {
     <Card>
       <div className="flex flex-wrap items-end gap-2 p-3 px-3.5">
         <Field label="EBS customer code" className="!mb-0 min-w-40 flex-1">
-          <Input className="!h-9" value={sheetValue} onChange={(e) => setSheetValue(e.target.value)} />
+          <Input className="!h-9" value={ecubixValue} onChange={(e) => setEcubixValue(e.target.value)} />
         </Field>
         <Field label="ERP customer" className="!mb-0 min-w-40 flex-1">
           <Input className="!h-9" value={erpValue} onChange={(e) => setErpValue(e.target.value)} />
@@ -112,7 +112,7 @@ function CustomerMappingTab() {
         <Button
           className="!h-9"
           variant="primary"
-          disabled={!sheetValue.trim() || !erpValue.trim() || saving}
+          disabled={!ecubixValue.trim() || !erpValue.trim() || saving}
           onClick={() => void add()}
         >
           {saving ? 'Saving…' : 'Add'}
@@ -148,7 +148,7 @@ function CustomerMappingTab() {
                     const m = customerMap[vi.index]
                     return (
                       <tr key={m.id} data-index={vi.index} ref={rowVirtualizer.measureElement}>
-                        <td className="text-[12.5px]">{m.displaySheetValue}</td>
+                        <td className="text-[12.5px]">{m.displayEcubixValue}</td>
                         <td className="mono text-xs">{m.erpValue}</td>
                         <td><OutlineChip>{m.source}</OutlineChip></td>
                         <td className="text-xs text-text-faint">{m.comment}</td>
@@ -185,7 +185,7 @@ function CustomerMappingTab() {
 
 /**
  * Item replace rules for Product master data. When an enabled pattern
- * matches a sheet product name, it resolves straight to that ERP Item
+ * matches an Ecubix product name, it resolves straight to that ERP Item
  * docname — takes precedence over exact/fuzzy item matching (see
  * validateRow.ts's resolveRegexOverride and erpActions.ts's matchItemsByName).
  *
@@ -284,7 +284,7 @@ function RegexMappingTab() {
 
   function downloadExcel() {
     const rows = sortedRegexMap.map((r) => ({
-      'Match · Sheet item': r.pattern,
+      'Match · Ecubix item': r.pattern,
       'Replace with · ERP item': r.value,
       Enabled: r.enabled ? 'Yes' : 'No',
     }))
@@ -310,7 +310,7 @@ function RegexMappingTab() {
         <table className="table-data">
           <thead>
             <tr>
-              <th>Match · Sheet item</th>
+              <th>Match · Ecubix item</th>
               <th>Replace with · ERP item</th>
               <th>Enabled</th>
               <th></th>
@@ -420,7 +420,7 @@ function RegexMappingTab() {
       <div className="border-t border-border p-3.5">
         <p className="mb-1 text-[13px] font-medium">Test rules</p>
         <Muted className="mb-2 block text-[12.5px]">
-          Paste a sheet item name to see which rule fires and the resulting ERP item.
+          Paste an Ecubix item name to see which rule fires and the resulting ERP item.
         </Muted>
         <Input
           className="!h-9"

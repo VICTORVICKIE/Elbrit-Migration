@@ -1,22 +1,23 @@
-// Ecubix (sheet) vs ERPNext reconciliation for the browse view — same
-// validation pipeline as ecubixBatch.ts (buildRowFromEcubixDoc + validateRow +
-// one fetchErpSnapshot per HQ), just run read-only and without creating a
-// Batch. Snapshots are fetched per leaf (not combined across leaves): a
-// combined `distributor in [...]` filter across every HQ in scope blows up
-// the query string for the Secondary Data Entry list call, which some
-// ERPNext deployments reject before ever sending CORS headers back — the
-// browser then reports that as an opaque "Failed to fetch"/CORS error.
-// Concurrency is capped for the same reason: an unfiltered "All
-// departments/All HQs" scope can mean dozens of leaves at once.
+// Ecubix vs ERPNext reconciliation for the browse view — same
+// validation pipeline as ecubixBatch.ts (buildRowFromEcubixDoc + validateRow),
+// just run read-only and without creating a Batch. computeReconciliation runs
+// in three phases: fetch+build every leaf's rows from Firestore, fetch the
+// ENTIRE ERP side (catalog + distributor resolution + existing docs + role
+// profiles) in ONE call for every leaf's EBS codes combined (via the
+// migration_secondary Server Script — see
+// fetchReconciliationSnapshot in erpActions.ts), then validate each leaf
+// against that shared snapshot. Falls back to the older two-call REST path
+// (fetchStaticErpIndex + a per-leaf fetchErpSnapshot) if that call fails
+// (e.g. the script isn't deployed on this ERPNext instance yet).
 
 import { buildMasterMap } from '../../data/appStore'
 import { normalizeItemName } from '../../engine/resolveItem'
 import { groupKey, validateRow } from '../../engine/validateRow'
 import { getHqRawRows } from '../../lib/ecubix/reads'
 import type { ErpNextClient } from '../../lib/erpnext/client'
-import type { ErpSecondaryDoc, HeaderMapEntry, MasterMapEntry, MigrationRow, RegexMapEntry } from '../../types'
+import type { CustomerProfile, ErpSecondaryDoc, HeaderMapEntry, MasterMapEntry, MigrationRow, RegexMapEntry } from '../../types'
 import { buildRowFromEcubixDoc } from './ecubixBatch'
-import { fetchErpSnapshot } from './erpActions'
+import { fetchErpSnapshot, fetchReconciliationSnapshot, fetchStaticErpIndex, type ReconciliationSnapshot } from './erpActions'
 
 export interface ReconciliationLeafKey {
   month: string // YYYYMM (ecubix collection key)
@@ -36,13 +37,13 @@ export interface LeafReconciliation {
   items: Set<string> // itemName
   unmappedItems: Set<string>
   deptHqMismatchCustomers: Set<string>
-  sheetSalesValue: number
+  ecubixSalesValue: number
   erpSalesValue: number
-  sheetClosingValue: number
+  ecubixClosingValue: number
   erpClosingValue: number
-  sheetSalesQty: number
+  ecubixSalesQty: number
   erpSalesQty: number
-  sheetClosingQty: number
+  ecubixClosingQty: number
   erpClosingQty: number
   matchedEqualValue: number
 }
@@ -54,15 +55,19 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
   const unmappedItems = new Set<string>()
   const deptHqMismatchCustomers = new Set<string>()
   let conflicts = 0
-  let sheetSalesValue = 0
+  let ecubixSalesValue = 0
   let erpSalesValue = 0
-  let sheetClosingValue = 0
+  let ecubixClosingValue = 0
   let erpClosingValue = 0
-  let sheetSalesQty = 0
+  let ecubixSalesQty = 0
   let erpSalesQty = 0
-  let sheetClosingQty = 0
+  let ecubixClosingQty = 0
   let erpClosingQty = 0
   let matchedEqualValue = 0
+  // Two Ecubix rows for the same distributor+date+item resolve to the same
+  // ERP item line — count that line's values only once, or the ERP-side
+  // total gets multiplied by however many Ecubix rows share it.
+  const erpCounted = new Set<string>()
 
   for (const r of rows) {
     if (r.ebsCode) {
@@ -76,20 +81,24 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
     }
     if (r.state === 'conflict') conflicts++
 
-    sheetSalesValue += r.values.sales_value ?? 0
-    sheetClosingValue += r.values.closing_balance ?? 0
-    sheetSalesQty += r.values.sales_qty ?? 0
-    sheetClosingQty += r.values.closing_qty ?? 0
+    ecubixSalesValue += r.values.sales_value ?? 0
+    ecubixClosingValue += r.values.closing_balance ?? 0
+    ecubixSalesQty += r.values.sales_qty ?? 0
+    ecubixClosingQty += r.values.closing_qty ?? 0
     const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
     const line = doc && r.resolved.item
       ? doc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(r.resolved.item!))
       : undefined
     if (line) {
-      erpSalesValue += line.sales_value ?? 0
-      erpClosingValue += line.closing_balance ?? 0
-      erpSalesQty += line.sales_qty ?? 0
-      erpClosingQty += line.closing_qty ?? 0
       if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
+      const erpKey = `${r.resolved.distributor}|${r.resolved.date}|${r.resolved.item}`
+      if (!erpCounted.has(erpKey)) {
+        erpCounted.add(erpKey)
+        erpSalesValue += line.sales_value ?? 0
+        erpClosingValue += line.closing_balance ?? 0
+        erpSalesQty += line.sales_qty ?? 0
+        erpClosingQty += line.closing_qty ?? 0
+      }
     }
   }
 
@@ -101,13 +110,13 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
     items,
     unmappedItems,
     deptHqMismatchCustomers,
-    sheetSalesValue,
+    ecubixSalesValue,
     erpSalesValue,
-    sheetClosingValue,
+    ecubixClosingValue,
     erpClosingValue,
-    sheetSalesQty,
+    ecubixSalesQty,
     erpSalesQty,
-    sheetClosingQty,
+    ecubixClosingQty,
     erpClosingQty,
     matchedEqualValue,
   }
@@ -122,13 +131,13 @@ export function sumReconciliation(list: LeafReconciliation[]): LeafReconciliatio
     items: new Set(),
     unmappedItems: new Set(),
     deptHqMismatchCustomers: new Set(),
-    sheetSalesValue: 0,
+    ecubixSalesValue: 0,
     erpSalesValue: 0,
-    sheetClosingValue: 0,
+    ecubixClosingValue: 0,
     erpClosingValue: 0,
-    sheetSalesQty: 0,
+    ecubixSalesQty: 0,
     erpSalesQty: 0,
-    sheetClosingQty: 0,
+    ecubixClosingQty: 0,
     erpClosingQty: 0,
     matchedEqualValue: 0,
   }
@@ -140,40 +149,35 @@ export function sumReconciliation(list: LeafReconciliation[]): LeafReconciliatio
     r.items.forEach((i) => out.items.add(i))
     r.unmappedItems.forEach((i) => out.unmappedItems.add(i))
     r.deptHqMismatchCustomers.forEach((c) => out.deptHqMismatchCustomers.add(c))
-    out.sheetSalesValue += r.sheetSalesValue
+    out.ecubixSalesValue += r.ecubixSalesValue
     out.erpSalesValue += r.erpSalesValue
-    out.sheetClosingValue += r.sheetClosingValue
+    out.ecubixClosingValue += r.ecubixClosingValue
     out.erpClosingValue += r.erpClosingValue
-    out.sheetSalesQty += r.sheetSalesQty
+    out.ecubixSalesQty += r.ecubixSalesQty
     out.erpSalesQty += r.erpSalesQty
-    out.sheetClosingQty += r.sheetClosingQty
+    out.ecubixClosingQty += r.ecubixClosingQty
     out.erpClosingQty += r.erpClosingQty
     out.matchedEqualValue += r.matchedEqualValue
   }
   return out
 }
 
-/** Runs one leaf's raw-rows fetch + ERP snapshot + validation, mirroring openOrCreateEcubixBatch's ERP step exactly. */
-async function computeLeafReconciliation(
+/** Fetches raw ecubix rows for one leaf and builds them into MigrationRows — the Firestore-only half of a leaf's work. */
+async function loadLeafRows(leaf: ReconciliationLeafKey, headerMap: HeaderMapEntry[]): Promise<MigrationRow[]> {
+  const monthYyyyMm = `${leaf.month.slice(0, 4)}-${leaf.month.slice(4, 6)}`
+  const raw = await getHqRawRows(leaf.month, leaf.department, leaf.hq)
+  return raw.map((r, i) => buildRowFromEcubixDoc(r, i + 1, headerMap, monthYyyyMm)).filter((r): r is MigrationRow => r !== null)
+}
+
+/** Validates one leaf's already-fetched rows against the shared ERP snapshot/bundle. */
+function validateLeafRows(
   leaf: ReconciliationLeafKey,
-  erp: ErpNextClient,
-  headerMap: HeaderMapEntry[],
+  rows: MigrationRow[],
   masterMapCtx: Map<string, Map<string, string>>,
   regexMap: RegexMapEntry[],
-): Promise<LeafReconciliation> {
-  const monthYyyyMm = `${leaf.month.slice(0, 4)}-${leaf.month.slice(4, 6)}`
+  snapshot: { items: Map<string, string>; customers: Map<string, string>; existing: Map<string, ErpSecondaryDoc>; customerProfiles: Map<string, CustomerProfile[]> },
+): LeafReconciliation {
   const erpHq = leaf.hq.replace(/^HQ-/i, '')
-
-  const raw = await getHqRawRows(leaf.month, leaf.department, leaf.hq)
-  const rows = raw
-    .map((r, i) => buildRowFromEcubixDoc(r, i + 1, headerMap, monthYyyyMm))
-    .filter((r): r is MigrationRow => r !== null)
-
-  const confirmedDistributors = Object.fromEntries(masterMapCtx.get('distributor') ?? [])
-  const ebsCodeErpFields = headerMap.find((h) => h.field === 'ebsCode')?.erpFields ?? []
-  const ebsCodes = [...new Set(rows.map((r) => r.ebsCode).filter(Boolean))]
-
-  const snapshot = await fetchErpSnapshot(erp, ebsCodes, ebsCodeErpFields, confirmedDistributors, monthYyyyMm)
   const ctx = {
     masterMap: masterMapCtx,
     regexMap,
@@ -189,7 +193,7 @@ async function computeLeafReconciliation(
   return reconciliationFromRows(validated, snapshot.existing)
 }
 
-const MAX_CONCURRENT_LEAVES = 3
+const MAX_CONCURRENT_LEAVES = 6
 
 export interface ReconciliationBatchResult {
   results: Map<string, LeafReconciliation>
@@ -198,12 +202,22 @@ export interface ReconciliationBatchResult {
 }
 
 /**
- * Runs the full sheet-vs-ERP check for a set of (month, department, hq)
- * leaves, one ERP snapshot per leaf (see computeLeafReconciliation), a few at
- * a time. A leaf that fails doesn't abort the rest — it's reported in
- * `failed` so the caller can decide whether to retry it. Callers own scoping
- * (which leaves to pass) and caching (this always re-fetches) — see
- * EcubixBrowser's `once()`-style request-dedup ref.
+ * Runs the full Ecubix-vs-ERP check for a set of (month, department, hq)
+ * leaves in three phases:
+ *  1. Fetch + build every leaf's raw ecubix rows from Firestore, a few at a
+ *     time (independent per leaf — this part doesn't change with scope size).
+ *  2. Union every leaf's raw EBS codes and fetch the ENTIRE ERP side in ONE
+ *     call for the whole batch — Item/Customer catalog, EBS-code→distributor
+ *     resolution, existing docs, and role profiles, all computed server-side
+ *     by the `migration_secondary` Server Script (see
+ *     `fetchReconciliationSnapshot` in erpActions.ts). This is what collapses
+ *     what used to be a catalog fetch plus per-HQ ERP round-trips down to a
+ *     single HTTP call regardless of how many HQs are in scope.
+ *  3. Validate each leaf's rows against that shared snapshot (pure CPU, no
+ *     further network calls).
+ * Falls back to the older two-call REST path (fetchStaticErpIndex + a
+ * per-leaf fetchErpSnapshot) if step 2 fails — e.g. the
+ * `migration_secondary` script hasn't been deployed yet.
  */
 export async function computeReconciliation(
   leaves: ReconciliationLeafKey[],
@@ -216,18 +230,70 @@ export async function computeReconciliation(
   const failed: { leaf: ReconciliationLeafKey; error: unknown }[] = []
   if (leaves.length === 0) return { results, failed }
   const masterMapCtx = buildMasterMap(masterMap)
+  const confirmedDistributors = Object.fromEntries(masterMapCtx.get('distributor') ?? [])
+  const ebsCodeErpFields = headerMap.find((h) => h.field === 'ebsCode')?.erpFields ?? []
 
+  // Phase 1 — Firestore reads, a few leaves at a time.
+  const rowsByLeaf = new Map<string, MigrationRow[]>()
   const queue = [...leaves]
-  async function worker() {
+  async function rowWorker() {
     let leaf: ReconciliationLeafKey | undefined
     while ((leaf = queue.shift())) {
       try {
-        results.set(reconciliationKey(leaf), await computeLeafReconciliation(leaf, erp, headerMap, masterMapCtx, regexMap))
+        rowsByLeaf.set(reconciliationKey(leaf), await loadLeafRows(leaf, headerMap))
       } catch (error) {
         failed.push({ leaf, error })
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_LEAVES, leaves.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_LEAVES, leaves.length) }, rowWorker))
+
+  const okLeaves = leaves.filter((l) => rowsByLeaf.has(reconciliationKey(l)))
+  if (okLeaves.length === 0) return { results, failed }
+
+  // Phase 2 — one ERP call for the whole batch. All leaves passed in from
+  // EcubixBrowser share one selected month, so a single snapshot call (keyed
+  // on the first leaf's month) covers every leaf.
+  const monthYyyyMm = `${okLeaves[0].month.slice(0, 4)}-${okLeaves[0].month.slice(4, 6)}`
+  const allEbsCodes = [
+    ...new Set(okLeaves.flatMap((l) => rowsByLeaf.get(reconciliationKey(l))!.map((r) => r.ebsCode)).filter(Boolean)),
+  ]
+  let snapshot: ReconciliationSnapshot | null = null
+  try {
+    snapshot = await fetchReconciliationSnapshot(erp, allEbsCodes, ebsCodeErpFields, confirmedDistributors, monthYyyyMm)
+  } catch {
+    snapshot = null // Server Script not deployed/reachable — fall back to the older per-leaf REST path below
+  }
+
+  // Phase 3 — validate. If the snapshot came through, this is pure CPU (no
+  // more network calls at all). Otherwise fall back to the old two-call path.
+  if (snapshot) {
+    for (const leaf of okLeaves) {
+      try {
+        results.set(reconciliationKey(leaf), validateLeafRows(leaf, rowsByLeaf.get(reconciliationKey(leaf))!, masterMapCtx, regexMap, snapshot))
+      } catch (error) {
+        failed.push({ leaf, error })
+      }
+    }
+    return { results, failed }
+  }
+
+  const staticIndex = await fetchStaticErpIndex(erp, ebsCodeErpFields)
+  const fallbackQueue = [...okLeaves]
+  async function fallbackWorker() {
+    let leaf: ReconciliationLeafKey | undefined
+    while ((leaf = fallbackQueue.shift())) {
+      try {
+        const rows = rowsByLeaf.get(reconciliationKey(leaf))!
+        const ebsCodes = [...new Set(rows.map((r) => r.ebsCode).filter(Boolean))]
+        const leafMonthYyyyMm = `${leaf.month.slice(0, 4)}-${leaf.month.slice(4, 6)}`
+        const snapshot = await fetchErpSnapshot(erp, ebsCodes, ebsCodeErpFields, confirmedDistributors, leafMonthYyyyMm, staticIndex)
+        results.set(reconciliationKey(leaf), validateLeafRows(leaf, rows, masterMapCtx, regexMap, snapshot))
+      } catch (error) {
+        failed.push({ leaf, error })
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_LEAVES, okLeaves.length) }, fallbackWorker))
   return { results, failed }
 }

@@ -9,8 +9,6 @@ import { Faint, Muted, SectionLabel } from '../../ui/Text'
 import type { ReactElement } from 'react'
 
 const FIELD_LABELS: Record<string, string> = {
-  primary_sales: 'Op. Value',
-  rate: 'Rate',
   sales_qty: 'Sec. Qty',
   sales_value: 'Sec. Value',
   closing_qty: 'Clos. Qty',
@@ -19,7 +17,7 @@ const FIELD_LABELS: Record<string, string> = {
   document: 'Document',
 }
 
-/** Slide-over panel: sheet-vs-ERP diff and per-status fix actions. */
+/** Slide-over panel: Ecubix-vs-ERP diff and per-status fix actions. */
 export function RowDetailPanel({
   row,
   onClose,
@@ -46,7 +44,7 @@ export function RowDetailPanel({
         {row.erpDocName && <Faint className="mono ml-2 text-[11.5px]">{row.erpDocName}</Faint>}
       </div>
 
-      <SectionLabel className="mb-1.5 block">Sheet row</SectionLabel>
+      <SectionLabel className="mb-1.5 block">Ecubix row</SectionLabel>
       <table className="table-data mb-4">
         <tbody>
           <tr>
@@ -62,7 +60,7 @@ export function RowDetailPanel({
             <td>{row.resolved.distributor ?? '—'}</td>
           </tr>
           <tr>
-            <td className="text-text-muted">Item (sheet)</td>
+            <td className="text-text-muted">Item (Ecubix)</td>
             <td>{row.itemName}</td>
           </tr>
           <tr>
@@ -95,12 +93,12 @@ export function RowDetailPanel({
 
       {diffs.length > 0 && (
         <>
-          <SectionLabel className="mb-1.5 block">Sheet vs ERP</SectionLabel>
+          <SectionLabel className="mb-1.5 block">Ecubix vs ERP</SectionLabel>
           <table className="table-data mb-4">
             <thead>
               <tr>
                 <th className="text-left">Field</th>
-                <th className="text-left">Sheet</th>
+                <th className="text-left">Ecubix</th>
                 <th className="text-left">ERP</th>
               </tr>
             </thead>
@@ -108,7 +106,7 @@ export function RowDetailPanel({
               {diffs.map((d, n) => (
                 <tr key={n}>
                   <td>{FIELD_LABELS[d.field] ?? d.field}</td>
-                  <td className="text-status-new">{d.sheet ?? '—'}</td>
+                  <td className="text-status-new">{d.ecubix ?? '—'}</td>
                   <td className="text-status-conflict">{d.erp ?? '—'}</td>
                 </tr>
               ))}
@@ -135,8 +133,8 @@ export function RowDetailPanel({
         )}
         {row.state === 'conflict' && (
           <>
-            <Button variant="primary" onClick={() => onUpdate({ ...row, resolution: 'use-sheet', state: 'matched' })}>
-              Use sheet values (update ERP on push)
+            <Button variant="primary" onClick={() => onUpdate({ ...row, resolution: 'use-ecubix', state: 'matched' })}>
+              Use Ecubix values (update ERP on push)
             </Button>
             <Button onClick={() => onUpdate({ ...row, resolution: 'keep-erp', state: 'synced' })}>
               Keep ERP values (mark as synced)

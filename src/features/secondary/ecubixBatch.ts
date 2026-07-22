@@ -1,14 +1,12 @@
-// Turns an ecubix HQ collection into the same Batch/MigrationRow shape the
-// Drive-import flow produced, so the existing check-and-fix page
-// (SecondaryPage) can open it unmodified. Mirrors SheetPicker's old
-// startBatch, minus the Drive download — rows come from Firestore instead of
-// a downloaded xlsx buffer.
+// Turns an ecubix HQ collection into the Batch/MigrationRow shape the
+// existing check-and-fix page (SecondaryPage) expects — rows come straight
+// from Firestore.
 
 import { buildMasterMap, useAppStore } from '../../data/appStore'
 import { slugify } from '../../data/slug'
 import { validateRow } from '../../engine/validateRow'
 import { getHqRawRows } from '../../lib/ecubix/reads'
-import { buildMigrationRowFromRaw, isSubtotalRow } from '../../lib/xlsx/parseWorkbook'
+import { buildMigrationRowFromRaw, isSubtotalRow } from './ecubixRow'
 import type { Batch, HeaderMapEntry, MigrationRow } from '../../types'
 import { erpClientFrom, fetchErpSnapshot } from './erpActions'
 
@@ -34,17 +32,17 @@ function coerce(value: string | number | null, type: HeaderMapEntry['type']): st
   }
 }
 
-/** One ecubix Firestore row (keyed by sheet header, e.g. "Stockist Code") -> MigrationRow, using the header map already configured in Settings for Ecubix exports. Returns null for subtotal/footer rows. */
+/** One ecubix Firestore row (keyed by Ecubix header, e.g. "Stockist Code") -> MigrationRow, using the header map already configured in Settings for Ecubix exports. Returns null for subtotal/footer rows. */
 export function buildRowFromEcubixDoc(
   ecubixRow: Record<string, string | number | null>,
   rowIndex: number,
   headerMap: HeaderMapEntry[],
   monthYyyyMm: string,
 ): MigrationRow | null {
-  const mapped = headerMap.filter((h) => h.sheetHeader.trim())
+  const mapped = headerMap.filter((h) => h.ecubixHeader.trim())
   const raw: Record<string, string | number | null> = {}
   for (const entry of mapped) {
-    raw[entry.field] = coerce(ecubixRow[entry.sheetHeader] ?? null, entry.type)
+    raw[entry.field] = coerce(ecubixRow[entry.ecubixHeader] ?? null, entry.type)
   }
   if (isSubtotalRow(raw)) return null
   const hq = String(ecubixRow['HQ'] ?? '').trim()
@@ -100,9 +98,9 @@ export async function openOrCreateEcubixBatch(month: string, department: string,
   const batch: Batch = {
     id,
     datatype: 'secondary',
-    driveFileId: `ecubix:${month}:${department}:${hqCollection}`,
-    fileName: `${hqCollection} — ${department}`,
-    fileModifiedTime: new Date().toISOString(),
+    sourceId: `ecubix:${month}:${department}:${hqCollection}`,
+    label: `${hqCollection} — ${department}`,
+    sourceUpdatedAt: new Date().toISOString(),
     department,
     hq: erpHq,
     month: monthYyyyMm,

@@ -36,10 +36,10 @@ interface AppState {
   saveSecondaryConfig(c: SecondaryConfig): Promise<void>
   upsertMasterMap(e: MasterMapEntry): Promise<void>
   removeMasterMap(id: string): Promise<void>
-  /** Confirm a fuzzy (or overridden) master-data match — upserts the global mapping, keyed by field + normalized sheet value, so every future batch reuses it. */
+  /** Confirm a fuzzy (or overridden) master-data match — upserts the global mapping, keyed by field + normalized Ecubix value, so every future batch reuses it. */
   confirmMasterMatch(
     field: string,
-    sheetValue: string,
+    ecubixValue: string,
     erpValue: string,
     source?: MasterMapEntry['source'],
     comment?: string,
@@ -62,12 +62,12 @@ interface AppState {
   revalidate(): Promise<void>
 }
 
-/** Group flat MasterMapEntry rows into the field → sheetValue → erpValue lookup ValidationContext expects. */
+/** Group flat MasterMapEntry rows into the field → ecubixValue → erpValue lookup ValidationContext expects. */
 export function buildMasterMap(entries: MasterMapEntry[]): Map<string, Map<string, string>> {
   const byField = new Map<string, Map<string, string>>()
   for (const e of entries) {
     if (!byField.has(e.field)) byField.set(e.field, new Map())
-    byField.get(e.field)!.set(e.sheetValue, e.erpValue)
+    byField.get(e.field)!.set(e.ecubixValue, e.erpValue)
   }
   return byField
 }
@@ -145,14 +145,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().revalidate()
   },
 
-  async confirmMasterMatch(field, sheetValue, erpValue, source = 'fuzzy', comment) {
-    const norm = sheetValue.trim().toLowerCase()
-    const existing = get().masterMap.find((m) => m.field === field && m.sheetValue === norm)
+  async confirmMasterMatch(field, ecubixValue, erpValue, source = 'fuzzy', comment) {
+    const norm = ecubixValue.trim().toLowerCase()
+    const existing = get().masterMap.find((m) => m.field === field && m.ecubixValue === norm)
     await get().upsertMasterMap({
       id: existing?.id ?? `master-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       field,
-      sheetValue: norm,
-      displaySheetValue: sheetValue,
+      ecubixValue: norm,
+      displayEcubixValue: ecubixValue,
       erpValue,
       source,
       comment: comment ?? existing?.comment ?? '',

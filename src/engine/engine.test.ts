@@ -16,8 +16,6 @@ function makeRow(overrides: Partial<MigrationRow> = {}): MigrationRow {
     hq: 'Kochi',
     resolved: { distributor: null, item: null, date: '2026-06-01', roleProfile: null, department: null, erpHq: null },
     values: {
-      primary_sales: 1000,
-      rate: 55.5,
       sales_qty: 5,
       sales_value: 277.5,
       closing_qty: 5,
@@ -55,8 +53,6 @@ function erpDoc(overrides: Partial<ErpSecondaryDoc> = {}): ErpSecondaryDoc {
     items: [
       {
         item: 'ITEM-ELB-500',
-        primary_sales: 1000,
-        rate: 55.5,
         sales_qty: 5,
         sales_value: 277.5,
         closing_qty: 5,
@@ -120,7 +116,7 @@ describe('validateRow', () => {
     const ctx = { ...baseCtx, erpExisting: new Map([['CUST-0001|2026-06-01', doc]]) }
     const row = validateRow(makeRow(), ctx)
     expect(row.state).toBe('conflict')
-    expect(row.diff).toEqual([{ field: 'sales_qty', sheet: 5, erp: 99 }])
+    expect(row.diff).toEqual([{ field: 'sales_qty', ecubix: 5, erp: 99 }])
   })
 
   it('currency tolerance ±0.01 does not create conflicts', () => {
@@ -135,7 +131,7 @@ describe('validateRow', () => {
     const doc = erpDoc()
     doc.items[0].sales_qty = 99
     const ctx = { ...baseCtx, erpExisting: new Map([['CUST-0001|2026-06-01', doc]]) }
-    const row = validateRow(makeRow({ resolution: 'use-sheet' }), ctx)
+    const row = validateRow(makeRow({ resolution: 'use-ecubix' }), ctx)
     expect(row.state).toBe('matched')
     expect(row.diff.length).toBeGreaterThan(0)
   })
@@ -206,10 +202,10 @@ describe('roundTripCompare', () => {
     expect(missing[0].ok).toBe(false)
 
     const changed = erpDoc()
-    changed.items[0].rate = 60
+    changed.items[0].sales_qty = 6
     const mismatch = roundTripCompare([pushed], new Map([[pushed.erpDocName!, changed]]))
     expect(mismatch[0].ok).toBe(false)
-    expect(mismatch[0].mismatches[0].field).toBe('rate')
+    expect(mismatch[0].mismatches[0].field).toBe('sales_qty')
   })
 })
 
@@ -227,7 +223,7 @@ describe('no ERP snapshot (demo / not configured)', () => {
     const conflictRow = makeRow({
       state: 'conflict',
       resolved: { distributor: 'CUST-0001', item: 'Elbrit-CV 625 Tablet', date: '2026-06-01', roleProfile: null, department: null, erpHq: null },
-      diff: [{ field: 'sales_qty', sheet: 8, erp: 6 }],
+      diff: [{ field: 'sales_qty', ecubix: 8, erp: 6 }],
       erpDocName: 'CUST-0001-2026-06-01',
     })
     const out = validateRow(conflictRow, noSnapshotCtx)
@@ -258,7 +254,7 @@ describe('diffRow / countRows', () => {
       hasErpSnapshot: true,
     })
     const doc = erpDoc({ items: [] })
-    expect(diffRow(row, doc)).toEqual([{ field: 'item', sheet: 'ITEM-ELB-500', erp: null }])
+    expect(diffRow(row, doc)).toEqual([{ field: 'item', ecubix: 'ITEM-ELB-500', erp: null }])
   })
   it('counts states', () => {
     const counts = countRows([makeRow({ state: 'new' }), makeRow({ state: 'error' }), makeRow({ state: 'error' })])

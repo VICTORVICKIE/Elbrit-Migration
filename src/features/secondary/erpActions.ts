@@ -7,7 +7,15 @@ import { normalizeItemName } from '../../engine/resolveItem'
 import { groupKey, resolveRegexOverride } from '../../engine/validateRow'
 import { bestFuzzyMatch } from '../../lib/fuzzyMatch'
 import { ErpApiError, ErpNextClient } from '../../lib/erpnext/client'
-import type { Credentials, CustomerProfile, ErpSecondaryDoc, ItemDepartment, MigrationRow, RegexMapEntry } from '../../types'
+import type {
+  Credentials,
+  CustomerProfile,
+  ErpSecondaryDoc,
+  ErpSecondaryItem,
+  ItemDepartment,
+  MigrationRow,
+  RegexMapEntry,
+} from '../../types'
 
 export const DOCTYPE = 'Secondary Data Entry'
 
@@ -17,28 +25,18 @@ export function erpClientFrom(credentials: Credentials): ErpNextClient | null {
   return new ErpNextClient({ baseUrl, apiKey, apiSecret })
 }
 
-/**
- * Prefetch the ERP snapshot validation needs: item index, customer index
- * (exact-match fast path, same as Master Data → Customer), existing docs for
- * the batch month, and each distributor's role profiles (ST-HQ mapping source:
- * Customer.custom_role_profile → Role Profile.custom_department/custom_territory).
- *
- * `ebsCodes` are resolved to ERP distributor names via `confirmedDistributors`
- * first, falling back to an exact match against ERP Customer's configured
- * field(s) — same precedence as `validateRow`'s distributor resolution.
- */
-export async function fetchErpSnapshot(
-  client: ErpNextClient,
-  ebsCodes: string[],
-  ebsCodeErpFields: string[],
-  confirmedDistributors: Record<string, string>, // normalized EBS code → ERP Customer docname
-  month: string, // yyyy-mm
-): Promise<{
+export interface StaticErpIndex {
   items: Map<string, string>
   customers: Map<string, string> // normalized EBS code → ERP Customer docname — exact-match fast path
-  existing: Map<string, ErpSecondaryDoc>
-  customerProfiles: Map<string, CustomerProfile[]>
-}> {
+}
+
+/**
+ * The leaf-independent half of the ERP snapshot — the full Item and Customer
+ * indexes, identical no matter which HQ/month is being checked. Fetch once
+ * and reuse across every leaf in a reconciliation batch instead of re-fetching
+ * the whole Item/Customer list per HQ (see `computeReconciliation`).
+ */
+export async function fetchStaticErpIndex(client: ErpNextClient, ebsCodeErpFields: string[]): Promise<StaticErpIndex> {
   const customerFields = targetFieldsFrom(ebsCodeErpFields, ['name'])
   const [itemDocs, customerRecords] = await Promise.all([
     client.listAll<{ name: string; item_name: string }>('Item', { fields: ['name', 'item_name'] }),
@@ -58,6 +56,103 @@ export async function fetchErpSnapshot(
       customers.set(normalizeItemName(code), r.name)
     }
   }
+  return { items, customers }
+}
+
+export interface ReconciliationSnapshot {
+  items: Map<string, string>
+  customers: Map<string, string> // normalized EBS code → ERP Customer docname — exact-match fast path
+  existing: Map<string, ErpSecondaryDoc> // groupKey(distributor, date) → doc
+  customerProfiles: Map<string, CustomerProfile[]>
+}
+
+/**
+ * One-shot replacement for the ENTIRE per-leaf ERP fetch (fetchStaticErpIndex
+ * + fetchErpSnapshot's existing-docs/role-profile halves), computed
+ * server-side by the `migration_secondary` Server Script (paste the Python
+ * below into ERPNext → Settings → Server Script, type "API", with the API
+ * Method field set exactly to `migration_secondary` — must be a valid Python
+ * identifier, since Frappe resolves API commands via `globals()[cmd]`; a
+ * kebab-case name can never be found that way). One call covers every leaf
+ * across the whole folder-summary scope — pass the union of every leaf's
+ * raw EBS codes, not one leaf's.
+ *
+ * Why this needs a server script rather than more REST calls: the REST list/
+ * getDoc endpoints enforce per-doctype read permissions (this is what the 403
+ * came from — the API key isn't necessarily allowed to read `DocType`/
+ * `Custom Field` metadata, which a client-side "resolve the child table name"
+ * approach would need). `frappe.get_all` run *inside* a script executes
+ * in-process and does not apply per-doctype permission checks, and
+ * `frappe.get_meta` reads doctype metadata from the framework's own cache
+ * with no REST permission gate at all. A POST body also has no query-string
+ * length limit, so — unlike doing this via REST — a single call can cover
+ * the whole Item/Customer catalog, EBS-code→distributor resolution, existing
+ * docs, and role profiles for every HQ in scope at once, instead of one
+ * catalog fetch plus a getDoc-per-doc/getDoc-per-distributor repeated per HQ.
+ */
+export async function fetchReconciliationSnapshot(
+  client: ErpNextClient,
+  ebsCodes: string[],
+  ebsCodeErpFields: string[],
+  confirmedDistributors: Record<string, string>, // normalized EBS code → ERP Customer docname
+  month: string, // yyyy-mm
+): Promise<ReconciliationSnapshot> {
+  const customerFields = targetFieldsFrom(ebsCodeErpFields, ['name'])
+  const raw = await client.call<{
+    items: { name: string; item_name: string }[]
+    customerRecords: { name: string; value: string }[]
+    existing: { name: string; distributor: string; date: string; items: ErpSecondaryItem[] }[]
+    customerProfiles: Record<string, CustomerProfile[]>
+  }>('migration_secondary', {
+    month,
+    ebs_codes: JSON.stringify(ebsCodes),
+    customer_fields: JSON.stringify(customerFields),
+    confirmed_distributors: JSON.stringify(confirmedDistributors),
+  })
+
+  const items = new Map<string, string>()
+  for (const it of raw.items) {
+    items.set(normalizeItemName(it.item_name || it.name), it.name)
+    items.set(normalizeItemName(it.name), it.name)
+  }
+  const customers = new Map<string, string>()
+  for (const r of raw.customerRecords) customers.set(normalizeItemName(r.value), r.name)
+
+  const existing = new Map<string, ErpSecondaryDoc>()
+  for (const doc of raw.existing) existing.set(groupKey(doc.distributor, doc.date), doc)
+
+  return { items, customers, existing, customerProfiles: new Map(Object.entries(raw.customerProfiles ?? {})) }
+}
+
+/**
+ * Prefetch the ERP snapshot validation needs: item index, customer index
+ * (exact-match fast path, same as Master Data → Customer), existing docs for
+ * the batch month, and each distributor's role profiles (ST-HQ mapping source:
+ * Customer.custom_role_profile → Role Profile.custom_department/custom_territory).
+ *
+ * `ebsCodes` are resolved to ERP distributor names via `confirmedDistributors`
+ * first, falling back to an exact match against ERP Customer's configured
+ * field(s) — same precedence as `validateRow`'s distributor resolution.
+ *
+ * `staticIndex` lets a caller checking multiple leaves (e.g. the folder-summary
+ * reconciliation's fallback path, used only if `fetchReconciliationSnapshot`
+ * isn't available) fetch the Item/Customer index once and pass it in here for
+ * every leaf, instead of each leaf re-fetching the whole Item/Customer list.
+ */
+export async function fetchErpSnapshot(
+  client: ErpNextClient,
+  ebsCodes: string[],
+  ebsCodeErpFields: string[],
+  confirmedDistributors: Record<string, string>, // normalized EBS code → ERP Customer docname
+  month: string, // yyyy-mm
+  staticIndex?: StaticErpIndex,
+): Promise<{
+  items: Map<string, string>
+  customers: Map<string, string> // normalized EBS code → ERP Customer docname — exact-match fast path
+  existing: Map<string, ErpSecondaryDoc>
+  customerProfiles: Map<string, CustomerProfile[]>
+}> {
+  const { items, customers } = staticIndex ?? (await fetchStaticErpIndex(client, ebsCodeErpFields))
 
   const distributors = [
     ...new Set(
@@ -339,7 +434,7 @@ export async function validatePushed(
               ...r.issues.filter((i) => i.code !== 'POST_PUSH_MISMATCH'),
               {
                 code: 'POST_PUSH_MISMATCH' as const,
-                message: 'ERP record differs from sheet after push',
+                message: 'ERP record differs from Ecubix after push',
                 severity: 'error' as const,
               },
             ],
@@ -388,7 +483,7 @@ async function fetchFieldValues(
 }
 
 /**
- * Exact-only match: sheet EBS codes against ERP Customer's configured
+ * Exact-only match: Ecubix EBS codes against ERP Customer's configured
  * field(s) (Settings → Header → ERP field map → EBS code → ERP Field).
  * EBS codes don't resemble customer names, so no fuzzy fallback — an
  * unresolved code needs a manual pick from `options`, same as before.
@@ -434,7 +529,7 @@ export async function matchCustomersByEbsCode(
 }
 
 /**
- * Fuzzy match: sheet product names against ERP Item's configured field(s)
+ * Fuzzy match: Ecubix product names against ERP Item's configured field(s)
  * (Settings → Header → ERP field map → Item name → ERP Field), falling back
  * to `item_name`/`name` if none picked yet. A regex override (Mappings →
  * Regex) takes precedence over everything else, then an exact hit confirms

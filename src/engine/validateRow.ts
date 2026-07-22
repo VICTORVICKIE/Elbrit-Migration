@@ -48,7 +48,7 @@ export function resolveRegexOverride(itemName: string, regexMap: RegexMapEntry[]
 }
 
 export interface ValidationContext {
-  /** Confirmed sheet-value → ERP-value mappings, by field (`distributor`, `item`, or any custom master field). See MasterMapEntry. */
+  /** Confirmed Ecubix-value → ERP-value mappings, by field (`distributor`, `item`, or any custom master field). See MasterMapEntry. */
   masterMap: Map<string, Map<string, string>>
   erpItemsIndex: Map<string, string> // normalized item name → ERP Item — fast path, no confirmation needed
   /** Normalized EBS code → ERP Customer docname — exact-match fast path, same idea as erpItemsIndex. */
@@ -62,11 +62,10 @@ export interface ValidationContext {
    */
   customerProfiles: Map<string, CustomerProfile[]>
   /**
-   * Fallback HQ for the ST-HQ AutoMapping step (2b) when a row's own sheet HQ
-   * column is blank — the batch's tagged HQ (chosen when the batch was
-   * created, from Drive tagging or the ecubix batch bridge), since every row
-   * in a batch shares it. Optional so existing callers/tests don't need
-   * updating.
+   * Fallback HQ for the ST-HQ AutoMapping step (2b) when a row's own Ecubix HQ
+   * column is blank — the batch's tagged HQ (chosen when the ecubix batch was
+   * created), since every row in a batch shares it. Optional so existing
+   * callers/tests don't need updating.
    */
   batchHq?: string
   /**
@@ -96,19 +95,19 @@ function numbersEqual(a: number | null, b: number | null): boolean {
   return Math.abs(a - b) <= CURRENCY_TOLERANCE
 }
 
-/** Field-level diff between a sheet row's values and the matching ERP item line. */
+/** Field-level diff between an Ecubix row's values and the matching ERP item line. */
 export function diffRow(row: MigrationRow, erpDoc: ErpSecondaryDoc): FieldDiff[] {
   const erpLine = row.resolved.item
     ? erpDoc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(row.resolved.item!))
     : undefined
   if (!erpLine) {
-    // Doc exists but this item line doesn't → everything sheet-side is "new in doc"
-    return [{ field: 'item', sheet: row.resolved.item, erp: null }]
+    // Doc exists but this item line doesn't → everything Ecubix-side is "new in doc"
+    return [{ field: 'item', ecubix: row.resolved.item, erp: null }]
   }
   const diffs: FieldDiff[] = []
   for (const f of VALUE_FIELDS) {
     if (!numbersEqual(row.values[f], erpLine[f])) {
-      diffs.push({ field: f, sheet: row.values[f], erp: erpLine[f] })
+      diffs.push({ field: f, ecubix: row.values[f], erp: erpLine[f] })
     }
   }
   return diffs
@@ -138,7 +137,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     issues.push({
       code: 'FIELD_MISSING',
       field: 'ebsCode',
-      message: 'EBS code missing in sheet row',
+      message: 'EBS code missing in Ecubix row',
       severity: 'error',
     })
   } else if (!distributor) {
@@ -154,7 +153,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
   // admin-configured pattern is a stronger signal than automatic matching;
   // then exact match against the ERP item index (fast path, no confirmation
   // needed); then a confirmed mapping override (see MasterMapEntry field
-  // 'item') for sheet names that don't match verbatim.
+  // 'item') for Ecubix names that don't match verbatim.
   const normItem = normalizeItemName(row.itemName)
   let erpItem =
     resolveRegexOverride(row.itemName, ctx.regexMap ?? []) ??
@@ -169,7 +168,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     issues.push({
       code: 'FIELD_MISSING',
       field: 'itemName',
-      message: 'Item name missing in sheet row',
+      message: 'Item name missing in Ecubix row',
       severity: 'error',
     })
   } else if (ctx.hasErpSnapshot && !erpItem) {
@@ -183,8 +182,8 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
 
   // 2b. ST-HQ auto mapping (port of ERP AutoMapping): pick the distributor's
   // role profile whose Territory + Department match the batch's tags (chosen
-  // when the batch was created — sheets don't carry per-row HQ or department
-  // columns). Several role profiles on one distributor can
+  // when the batch was created — Ecubix rows don't carry per-row HQ or
+  // department columns). Several role profiles on one distributor can
   // share a Territory but differ by department, so both are needed to land
   // on exactly one match → mapped; none → HQ_UNMAPPED; still ambiguous → MULTI_DEPT.
   let roleProfile: string | null = row.resolved.roleProfile
@@ -276,7 +275,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
       if (diff.length === 0) {
         // Already in ERP and identical → nothing to push
         state = row.state === 'synced' ? 'synced' : 'matched'
-      } else if (row.resolution === 'use-sheet' || row.resolution === 'keep-erp') {
+      } else if (row.resolution === 'use-ecubix' || row.resolution === 'keep-erp') {
         // user already resolved this conflict; keep matched so push logic honors resolution
         state = 'matched'
       } else {

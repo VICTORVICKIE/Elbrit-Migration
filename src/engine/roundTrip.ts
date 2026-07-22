@@ -8,7 +8,7 @@ export interface RoundTripResult {
 }
 
 /**
- * Step 4 — compare freshly fetched ERP docs against sheet rows.
+ * Step 4 — compare freshly fetched ERP docs against Ecubix rows.
  * Returns one result per row that participated in a push group.
  */
 export function roundTripCompare(
@@ -23,7 +23,7 @@ export function roundTripCompare(
         return {
           rowId: row.id,
           ok: false,
-          mismatches: [{ field: 'document', sheet: row.erpDocName, erp: null }],
+          mismatches: [{ field: 'document', ecubix: row.erpDocName, erp: null }],
         }
       }
       const mismatches = diffRow(row, doc)

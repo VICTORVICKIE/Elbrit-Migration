@@ -11,7 +11,7 @@ const STEPS = [
   { n: 1, title: 'Download from Ecubix', desc: 'Synced into Firestore automatically each month' },
   { n: 2, title: 'Check & fix', desc: 'Resolve unmapped codes, item names and conflicts' },
   { n: 3, title: 'Push to ERPNext', desc: 'Creates new records, updates matched ones' },
-  { n: 4, title: 'Validate', desc: 'Every ERP record is compared back against the sheet' },
+  { n: 4, title: 'Validate', desc: 'Every ERP record is compared back against Ecubix' },
 ]
 
 const SOON_TYPES = ['Visit', 'Service', 'Support']
@@ -109,7 +109,7 @@ export function DashboardPage() {
           <table className="table-data">
             <thead>
               <tr>
-                <th>Sheet</th>
+                <th>Ecubix</th>
                 <th>Department</th>
                 <th>Rows</th>
                 <th>Status</th>
@@ -119,7 +119,7 @@ export function DashboardPage() {
             <tbody>
               {secondaryBatches.map((b) => (
                 <tr key={b.id} className="clickable" onClick={() => router.push(`/secondary/${b.id}`)}>
-                  <td className="mono text-[12.5px]">{b.fileName}</td>
+                  <td className="mono text-[12.5px]">{b.label}</td>
                   <td>{b.department}</td>
                   <td>{b.counts.total}</td>
                   <td className="text-[12.5px] text-text-muted">{statusSummary(b.counts)}</td>

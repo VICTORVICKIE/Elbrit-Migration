@@ -4,8 +4,8 @@
 // Everything lives under one top-level "migration" collection so this app
 // doesn't sprawl across netstar's shared Firestore namespace:
 //   migration/secrets                    — ERPNext credentials (admin-only)
-//   migration/config                     — secondary-sheet parsing config
-//   migration/mapping/secondary/{id}      — sheet-value → ERP-value mappings (see MasterMapEntry)
+//   migration/config                     — secondary-Ecubix parsing config
+//   migration/mapping/secondary/{id}      — Ecubix-value → ERP-value mappings (see MasterMapEntry)
 //   migration/mapping/regex/{id}          — regex → ERP-value overrides for Product master data (see RegexMapEntry)
 //   migration/data/batches/{batchId} (+ rows subcollection)
 
@@ -17,7 +17,7 @@ import {
   getDocs,
   setDoc,
   writeBatch,
-} from 'firebase/firestore'
+} from 'firebase/firestore/lite'
 import { db } from '../lib/firebase'
 import type {
   Batch,

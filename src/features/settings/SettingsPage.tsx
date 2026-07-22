@@ -315,7 +315,7 @@ function SecondaryConfigTab() {
             <thead>
               <tr>
                 <th>Field</th>
-                <th>Sheet header</th>
+                <th>Ecubix header</th>
                 <th>ERP Field</th>
                 <th>Required</th>
               </tr>
@@ -327,8 +327,8 @@ function SecondaryConfigTab() {
                   <td>
                     <Input
                       className="max-w-50 px-2 py-1"
-                      value={h.sheetHeader}
-                      onChange={(e) => setHeader(h.field, { sheetHeader: e.target.value })}
+                      value={h.ecubixHeader}
+                      onChange={(e) => setHeader(h.field, { ecubixHeader: e.target.value })}
                     />
                   </td>
                   <td>

@@ -12,23 +12,22 @@ export const FIXED_HEADER_FIELDS: { field: HeaderMapField; label: string; type: 
 ]
 
 // Header map is a fixed set of rows (see FIXED_HEADER_FIELDS) — only the
-// sheet header, ERP field(s), type and required flag are configurable.
+// Ecubix header, ERP field(s), type and required flag are configurable.
 export const EMPTY_SECONDARY_CONFIG: SecondaryConfig = {
   headerMap: FIXED_HEADER_FIELDS.map((f) => ({
     field: f.field,
-    sheetHeader: '',
+    ecubixHeader: '',
     erpFields: [],
     type: f.type,
     required: f.required,
   })),
-  dateSource: 'column',
 }
 
 /**
  * Reconcile a loaded SecondaryConfig against the fixed row set — old/partial
  * saved configs (missing a row, or carrying leftover fields from before the
  * header map was fixed) get patched to exactly FIXED_HEADER_FIELDS, keeping
- * whatever sheetHeader/erpFields/required each field already had.
+ * whatever ecubixHeader/erpFields/required each field already had.
  */
 const VALID_TYPES = new Set(['string', 'int', 'currency', 'date'])
 
@@ -38,7 +37,7 @@ export function normalizeHeaderMap(headerMap: HeaderMapEntry[]): HeaderMapEntry[
     const existing = byField.get(f.field)
     return {
       field: f.field,
-      sheetHeader: existing?.sheetHeader ?? '',
+      ecubixHeader: existing?.ecubixHeader ?? '',
       erpFields: Array.isArray(existing?.erpFields) ? existing.erpFields : [],
       type: existing && VALID_TYPES.has(existing.type) ? existing.type : f.type,
       required: existing?.required ?? f.required,

@@ -1,5 +1,5 @@
 // Sørensen–Dice coefficient over character bigrams — used to suggest ERP
-// master-data matches when sheet names have minor spelling/punctuation drift
+// master-data matches when Ecubix names have minor spelling/punctuation drift
 // (e.g. "Brightway Pharma" vs "Brightway Pharma Pvt Ltd"). More robust to
 // word reordering than plain Levenshtein edit distance, and cheap enough to
 // run over a full doctype's records client-side.
