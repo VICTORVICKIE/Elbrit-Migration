@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -52,6 +52,21 @@ function fmt(n: number | null): string {
 
 function fmtCurrency(n: number): string {
   return `₹${fmt(n)}`
+}
+
+// Per-field ERP value for a row: 'new' rows have no ERP record at all;
+// otherwise a diff entry means the field mismatched (use its recorded erp
+// value), and absence of a diff entry means the field matched (same as sheet).
+function erpValueFor(r: MigrationRow, field: string): string | number | null | undefined {
+  if (r.state === 'new') return undefined
+  const d = r.diff.find((d) => d.field === field)
+  if (d) return d.erp
+  return r.raw[field]
+}
+
+function fmtCell(v: string | number | null | undefined): string {
+  if (v === undefined) return '—'
+  return typeof v === 'number' ? fmt(v) : (v ?? '—')
 }
 
 const ISSUE_LABELS: Record<string, string> = {
@@ -189,6 +204,7 @@ export function SecondaryPage() {
       {
         count: number
         sums: Record<string, number>
+        erpSums: Record<string, number>
         states: Partial<Record<RowState, number>>
         issueCount: number
         rows: MigrationRow[]
@@ -197,11 +213,14 @@ export function SecondaryPage() {
     >()
     for (const r of visible) {
       const key = r.customerName || '—'
-      const g = groups.get(key) ?? { count: 0, sums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined }
+      const g =
+        groups.get(key) ?? { count: 0, sums: {}, erpSums: {}, states: {}, issueCount: 0, rows: [], ebsCode: r.ebsCode || undefined }
       g.count++
       for (const h of numericHeaderMap) {
         const v = r.raw[h.field]
         if (typeof v === 'number') g.sums[h.field] = (g.sums[h.field] ?? 0) + v
+        const erpV = erpValueFor(r, h.field)
+        if (typeof erpV === 'number') g.erpSums[h.field] = (g.erpSums[h.field] ?? 0) + erpV
       }
       g.states[r.state] = (g.states[r.state] ?? 0) + 1
       g.issueCount += r.issues.length > 0 ? r.issues.length : r.diff.length
@@ -366,7 +385,7 @@ export function SecondaryPage() {
         !hasBatchTag ||
         profiles.some(
           (p) =>
-            (!wantedHq || p.hq.trim().toLowerCase() === wantedHq) &&
+            (!wantedHq || p.hq.trim().toLowerCase().replace(/^hq-/, '') === wantedHq) &&
             (!wantedDept || p.department.trim().toLowerCase() === wantedDept),
         )
       map.set(c.ebsCode, Boolean(m?.erpValue) && roleProfileMatches)
@@ -1057,21 +1076,39 @@ export function SecondaryPage() {
         <div ref={tableScrollRef} className="table-scroll max-h-[70vh] overflow-y-auto [&_.table-data]:min-w-0">
           <table className="table-data">
             <thead>
-              <tr>
-                {groupedVisible ? (
-                  <>
-                    <th className="w-7.5" />
-                    <th>Stockist / Item</th>
+              {groupedVisible ? (
+                <>
+                  <tr>
+                    <th className="w-7.5" rowSpan={2} />
+                    <th rowSpan={2}>Stockist / Item</th>
                     {numericHeaderMap.map((h) => (
-                      <th key={h.field}>{h.sheetHeader || h.field}</th>
+                      <th
+                        key={h.field}
+                        colSpan={2}
+                        className={cn('border-l border-border text-center', h.field === 'closing_balance' && 'border-r')}
+                      >
+                        {h.sheetHeader || h.field}
+                      </th>
                     ))}
-                    <th>Rows</th>
-                    <th>Status</th>
-                    {prefs.issueHints && <th>Issues</th>}
-                  </>
-                ) : (
-                  <>
-                    <th className="w-7.5">
+                    <th rowSpan={2}>Rows</th>
+                    <th rowSpan={2}>Status</th>
+                    {prefs.issueHints && <th rowSpan={2}>Issues</th>}
+                  </tr>
+                  <tr>
+                    {numericHeaderMap.map((h) => (
+                      <Fragment key={h.field}>
+                        <th className="border-l border-border text-[10px] font-normal text-text-faint">ECUBIX</th>
+                        <th className={cn('text-[10px] font-normal text-text-faint', h.field === 'closing_balance' && 'border-r border-border')}>
+                          ERP
+                        </th>
+                      </Fragment>
+                    ))}
+                  </tr>
+                </>
+              ) : (
+                <>
+                  <tr>
+                    <th className="w-7.5" rowSpan={2}>
                       <Checkbox
                         checked={visible.length > 0 && visible.every((r) => selected.has(r.id))}
                         onCheckedChange={(checked) =>
@@ -1079,14 +1116,45 @@ export function SecondaryPage() {
                         }
                       />
                     </th>
-                    {displayHeaderMap.map((h) => (
-                      <th key={h.field}>{h.sheetHeader || h.field}</th>
-                    ))}
-                    <th>Status</th>
-                    {prefs.issueHints && <th>Issues</th>}
-                  </>
-                )}
-              </tr>
+                    {displayHeaderMap.map((h) => {
+                      const isNumeric = h.type === 'int' || h.type === 'currency'
+                      return isNumeric ? (
+                        <th
+                          key={h.field}
+                          colSpan={2}
+                          className={cn('border-l border-border text-center', h.field === 'closing_balance' && 'border-r')}
+                        >
+                          {h.sheetHeader || h.field}
+                        </th>
+                      ) : (
+                        <th key={h.field} rowSpan={2}>
+                          {h.sheetHeader || h.field}
+                        </th>
+                      )
+                    })}
+                    <th rowSpan={2}>Status</th>
+                    {prefs.issueHints && <th rowSpan={2}>Issues</th>}
+                  </tr>
+                  <tr>
+                    {displayHeaderMap.map((h) => {
+                      const isNumeric = h.type === 'int' || h.type === 'currency'
+                      return isNumeric ? (
+                        <Fragment key={h.field}>
+                          <th className="border-l border-border text-[10px] font-normal text-text-faint">ECUBIX</th>
+                          <th
+                            className={cn(
+                              'text-[10px] font-normal text-text-faint',
+                              h.field === 'closing_balance' && 'border-r border-border',
+                            )}
+                          >
+                            ERP
+                          </th>
+                        </Fragment>
+                      ) : null
+                    })}
+                  </tr>
+                </>
+              )}
             </thead>
             <tbody>
               {groupedVisible
@@ -1107,9 +1175,17 @@ export function SecondaryPage() {
                           )}
                         </td>
                         {numericHeaderMap.map((h) => (
-                          <td key={h.field} className="text-[12.5px]">
-                            {fmt(g.sums[h.field] ?? null)}
-                          </td>
+                          <Fragment key={h.field}>
+                            <td className="border-l border-border text-[12.5px]">{fmt(g.sums[h.field] ?? null)}</td>
+                            <td
+                              className={cn(
+                                'text-[12.5px] text-text-muted',
+                                h.field === 'closing_balance' && 'border-r border-border',
+                              )}
+                            >
+                              {fmt(g.erpSums[h.field] ?? null)}
+                            </td>
+                          </Fragment>
                         ))}
                         <td className="text-[12.5px] text-text-faint">{g.count}</td>
                         <td>
@@ -1146,9 +1222,17 @@ export function SecondaryPage() {
                         {numericHeaderMap.map((h) => {
                           const v = r.raw[h.field]
                           return (
-                            <td key={h.field} className="text-[12.5px]">
-                              {typeof v === 'number' ? fmt(v) : '—'}
-                            </td>
+                            <Fragment key={h.field}>
+                              <td className="border-l border-border text-[12.5px]">{typeof v === 'number' ? fmt(v) : '—'}</td>
+                              <td
+                                className={cn(
+                                  'text-[12.5px] text-text-muted',
+                                  h.field === 'closing_balance' && 'border-r border-border',
+                                )}
+                              >
+                                {fmtCell(erpValueFor(r, h.field))}
+                              </td>
+                            </Fragment>
                           )
                         })}
                         <td />
@@ -1177,7 +1261,8 @@ export function SecondaryPage() {
                   })
                 : (() => {
                     const virtualItems = rowVirtualizer.getVirtualItems()
-                    const colSpan = displayHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
+                    const numericInDisplay = displayHeaderMap.filter((h) => h.type === 'int' || h.type === 'currency').length
+                    const colSpan = displayHeaderMap.length + numericInDisplay + 2 + (prefs.issueHints ? 1 : 0)
                     const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0
                     const paddingBottom =
                       virtualItems.length > 0
@@ -1213,15 +1298,33 @@ export function SecondaryPage() {
                               </td>
                               {displayHeaderMap.map((h) => {
                                 const v = r.raw[h.field]
+                                const isNumeric = h.type === 'int' || h.type === 'currency'
+                                if (!isNumeric) {
+                                  return (
+                                    <td key={h.field} className="text-[12.5px]">
+                                      {h.field === 'customerName' && r.ebsCode && (
+                                        <>
+                                          <Faint>{r.ebsCode}</Faint>{' — '}
+                                        </>
+                                      )}
+                                      {typeof v === 'number' ? fmt(v) : (v ?? '—')}
+                                    </td>
+                                  )
+                                }
                                 return (
-                                  <td key={h.field} className="text-[12.5px]">
-                                    {h.field === 'customerName' && r.ebsCode && (
-                                      <>
-                                        <Faint>{r.ebsCode}</Faint>{' — '}
-                                      </>
-                                    )}
-                                    {typeof v === 'number' ? fmt(v) : (v ?? '—')}
-                                  </td>
+                                  <Fragment key={h.field}>
+                                    <td className="border-l border-border text-[12.5px]">
+                                      {typeof v === 'number' ? fmt(v) : (v ?? '—')}
+                                    </td>
+                                    <td
+                                      className={cn(
+                                        'text-[12.5px] text-text-muted',
+                                        h.field === 'closing_balance' && 'border-r border-border',
+                                      )}
+                                    >
+                                      {fmtCell(erpValueFor(r, h.field))}
+                                    </td>
+                                  </Fragment>
                                 )
                               })}
                               <td><StatusChip state={r.state} /></td>
@@ -1259,8 +1362,11 @@ export function SecondaryPage() {
                   <td
                     colSpan={
                       groupedVisible
-                        ? numericHeaderMap.length + 4 + (prefs.issueHints ? 1 : 0)
-                        : displayHeaderMap.length + 2 + (prefs.issueHints ? 1 : 0)
+                        ? numericHeaderMap.length * 2 + 4 + (prefs.issueHints ? 1 : 0)
+                        : displayHeaderMap.length +
+                          displayHeaderMap.filter((h) => h.type === 'int' || h.type === 'currency').length +
+                          2 +
+                          (prefs.issueHints ? 1 : 0)
                     }
                     className="py-7 text-center text-text-muted"
                   >

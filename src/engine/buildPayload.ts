@@ -52,7 +52,6 @@ export function buildDocPayload(group: PushGroup): {
     date: group.date,
     items: group.rows.map((r) => ({
       item: r.resolved.item!,
-      opening_qty: r.values.opening_qty,
       primary_sales: r.values.primary_sales,
       rate: r.values.rate,
       sales_qty: r.values.sales_qty,

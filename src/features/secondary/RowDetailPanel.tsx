@@ -9,7 +9,6 @@ import { Faint, Muted, SectionLabel } from '../../ui/Text'
 import type { ReactElement } from 'react'
 
 const FIELD_LABELS: Record<string, string> = {
-  opening_qty: 'Op. Qty',
   primary_sales: 'Op. Value',
   rate: 'Rate',
   sales_qty: 'Sec. Qty',

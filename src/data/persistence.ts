@@ -28,7 +28,7 @@ import type {
   SecondaryConfig,
   UserPrefs,
 } from '../types'
-import { DEFAULT_PREFS, EMPTY_CREDENTIALS, EMPTY_SECONDARY_CONFIG } from './defaults'
+import { DEFAULT_PREFS, EMPTY_CREDENTIALS, EMPTY_SECONDARY_CONFIG, normalizeHeaderMap } from './defaults'
 
 export interface Snapshot {
   credentials: Credentials
@@ -69,7 +69,10 @@ export const persistence: Persistence = {
     ])
     return {
       credentials: (credSnap?.data() as Credentials | undefined) ?? EMPTY_CREDENTIALS,
-      secondaryConfig: (cfgSnap.data() as SecondaryConfig | undefined) ?? EMPTY_SECONDARY_CONFIG,
+      secondaryConfig: (() => {
+        const loaded = (cfgSnap.data() as SecondaryConfig | undefined) ?? EMPTY_SECONDARY_CONFIG
+        return { ...loaded, headerMap: normalizeHeaderMap(loaded.headerMap) }
+      })(),
       masterMap: masterMapSnap.docs.map((d) => d.data() as MasterMapEntry),
       regexMap: regexMapSnap.docs.map((d) => d.data() as RegexMapEntry),
       batches: batchesSnap.docs

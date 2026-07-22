@@ -93,7 +93,6 @@ export function buildMigrationRowFromRaw(
       erpHq: null,
     },
     values: {
-      opening_qty: num('opening_qty'),
       primary_sales: num('primary_sales'),
       rate: num('rate'),
       sales_qty: num('sales_qty'),

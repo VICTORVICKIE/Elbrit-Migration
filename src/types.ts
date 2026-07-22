@@ -54,7 +54,6 @@ export interface MigrationRow {
     erpHq: string | null // Territory
   }
   values: {
-    opening_qty: number | null
     primary_sales: number | null
     rate: number | null
     sales_qty: number | null
@@ -151,7 +150,6 @@ export type HeaderMapField =
   | 'customerName'
   | 'ebsCode'
   | 'itemName'
-  | 'opening_qty'
   | 'sales_qty'
   | 'sales_value'
   | 'closing_qty'
@@ -205,7 +203,6 @@ export interface ErpSecondaryDoc {
 
 export interface ErpSecondaryItem {
   item: string
-  opening_qty: number | null
   primary_sales: number | null
   rate: number | null
   sales_qty: number | null
@@ -218,7 +215,6 @@ export interface ErpSecondaryItem {
 }
 
 export const VALUE_FIELDS = [
-  'opening_qty',
   'primary_sales',
   'rate',
   'sales_qty',

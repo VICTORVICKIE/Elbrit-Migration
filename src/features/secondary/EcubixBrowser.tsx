@@ -899,27 +899,31 @@ export function EcubixBrowser() {
                         onClick={() => setExpandedValueCard(c.key)}
                       >
                         <div className="text-[11px] font-bold tracking-[0.04em] text-text-muted">{c.label.toUpperCase()}</div>
-                        <div className="mt-2 flex items-baseline gap-4">
-                          <div>
+                        <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+                          <div className="min-w-0 rounded-md bg-surface p-2">
                             <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">ECUBIX</div>
-                            <div className="text-[17px] font-bold">{format(sheet)}</div>
+                            <div className="mt-0.5 truncate text-[15px] font-bold" title={format(sheet)}>
+                              {format(sheet)}
+                            </div>
                           </div>
-                          <div className="text-[15px] text-border-strong">→</div>
-                          <div>
+                          <div className="min-w-0 rounded-md bg-surface p-2">
                             <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">ERPNEXT</div>
-                            <div className="text-[17px] font-bold">{format(erp)}</div>
+                            <div className="mt-0.5 truncate text-[15px] font-bold" title={format(erp)}>
+                              {format(erp)}
+                            </div>
                           </div>
-                          <div className="ml-auto text-right">
-                            <div className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">DIFF</div>
-                            <span
-                              className={cn(
-                                'mt-0.5 inline-block rounded-md px-2 py-0.5 text-xs font-bold',
-                                diff > 0 ? 'bg-status-error-bg text-status-error' : 'bg-status-synced-bg text-status-synced',
-                              )}
-                            >
-                              {format(diff)}
-                            </span>
-                          </div>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <span className="text-[9.5px] font-bold tracking-[0.05em] text-text-faint">DIFF</span>
+                          <span
+                            className={cn(
+                              'min-w-0 truncate rounded-md px-2 py-0.5 text-xs font-bold',
+                              diff > 0 ? 'bg-status-error-bg text-status-error' : 'bg-status-synced-bg text-status-synced',
+                            )}
+                            title={format(diff)}
+                          >
+                            {format(diff)}
+                          </span>
                         </div>
                         <div className="mt-2 text-[11px] font-semibold text-text-muted">
                           Click to see department → HQ breakdown →

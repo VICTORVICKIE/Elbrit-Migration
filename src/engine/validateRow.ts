@@ -194,7 +194,9 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     const profiles = ctx.customerProfiles.get(distributor) ?? []
     const wantedHq = (ctx.batchHq || '').trim().toLowerCase()
     const wantedDept = (ctx.batchDepartment || '').trim().toLowerCase()
-    const byHq = wantedHq ? profiles.filter((p) => p.hq.trim().toLowerCase() === wantedHq) : profiles
+    const byHq = wantedHq
+      ? profiles.filter((p) => p.hq.trim().toLowerCase().replace(/^hq-/, '') === wantedHq)
+      : profiles
     const matches =
       wantedDept && byHq.length > 1 ? byHq.filter((p) => p.department.trim().toLowerCase() === wantedDept) : byHq
     if (matches.length === 1) {

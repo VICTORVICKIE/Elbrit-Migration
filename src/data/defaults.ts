@@ -5,7 +5,6 @@ export const FIXED_HEADER_FIELDS: { field: HeaderMapField; label: string; type: 
   { field: 'customerName', label: 'Customer name', type: 'string', required: true },
   { field: 'ebsCode', label: 'EBS code', type: 'string', required: true },
   { field: 'itemName', label: 'Item name', type: 'string', required: true },
-  { field: 'opening_qty', label: 'Opening qty', type: 'int', required: false },
   { field: 'sales_qty', label: 'Secondary qty', type: 'int', required: false },
   { field: 'sales_value', label: 'Secondary value', type: 'currency', required: false },
   { field: 'closing_qty', label: 'Closing qty', type: 'int', required: false },

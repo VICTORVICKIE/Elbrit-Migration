@@ -16,7 +16,6 @@ function makeRow(overrides: Partial<MigrationRow> = {}): MigrationRow {
     hq: 'Kochi',
     resolved: { distributor: null, item: null, date: '2026-06-01', roleProfile: null, department: null, erpHq: null },
     values: {
-      opening_qty: 10,
       primary_sales: 1000,
       rate: 55.5,
       sales_qty: 5,
@@ -56,7 +55,6 @@ function erpDoc(overrides: Partial<ErpSecondaryDoc> = {}): ErpSecondaryDoc {
     items: [
       {
         item: 'ITEM-ELB-500',
-        opening_qty: 10,
         primary_sales: 1000,
         rate: 55.5,
         sales_qty: 5,
