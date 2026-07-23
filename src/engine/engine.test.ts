@@ -24,6 +24,7 @@ function makeRow(overrides: Partial<MigrationRow> = {}): MigrationRow {
     state: 'new',
     issues: [],
     diff: [],
+    erpValues: null,
     erpDocName: null,
     resolution: null,
     push: { attempts: 0, lastError: null, lastAt: null },
@@ -254,7 +255,10 @@ describe('diffRow / countRows', () => {
       hasErpSnapshot: true,
     })
     const doc = erpDoc({ items: [] })
-    expect(diffRow(row, doc)).toEqual([{ field: 'item', ecubix: 'ITEM-ELB-500', erp: null }])
+    expect(diffRow(row, doc)).toEqual({
+      diffs: [{ field: 'item', ecubix: 'ITEM-ELB-500', erp: null }],
+      erpValues: null,
+    })
   })
   it('counts states', () => {
     const counts = countRows([makeRow({ state: 'new' }), makeRow({ state: 'error' }), makeRow({ state: 'error' })])

@@ -85,7 +85,9 @@ function reconciliationFromRows(rows: MigrationRow[], erpExisting: Map<string, E
     ecubixSalesQty += r.values.sales_qty ?? 0
     ecubixClosingQty += r.values.closing_qty ?? 0
     const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
-    const line = doc && r.resolved.item ? findErpLine(doc, r.resolved.item) : undefined
+    const line = doc && r.resolved.item
+      ? findErpLine(doc, r.resolved.item, { department: r.resolved.department, hq: r.resolved.erpHq })
+      : undefined
     if (line) {
       if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
       const erpKey = `${r.resolved.distributor}|${r.resolved.date}|${r.resolved.item}`

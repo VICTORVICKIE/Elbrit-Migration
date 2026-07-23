@@ -3,12 +3,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useWindowVirtualizer } from '@tanstack/react-virtual'
 import { useShallow } from 'zustand/react/shallow'
 import { StatusChip } from '../../components/StatusChip'
 import { buildMasterMap, useAppStore } from '../../data/appStore'
 import { countRows, findErpLine, groupKey } from '../../engine/validateRow'
-import type { CustomerProfile, ErpSecondaryDoc, ItemDepartment, MigrationRow, RowState } from '../../types'
+import type { CustomerProfile, ErpSecondaryDoc, ItemDepartment, MigrationRow, RowState, ValueField } from '../../types'
 import { VALUE_FIELDS } from '../../types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
@@ -54,14 +54,13 @@ function fmtCurrency(n: number): string {
   return `₹${fmt(n)}`
 }
 
-// Per-field ERP value for a row: 'new' rows have no ERP record at all;
-// otherwise a diff entry means the field mismatched (use its recorded erp
-// value), and absence of a diff entry means the field matched (same as Ecubix).
-function erpValueFor(r: MigrationRow, field: string): string | number | null | undefined {
-  if (r.state === 'new') return undefined
-  const d = r.diff.find((d) => d.field === field)
-  if (d) return d.erp
-  return r.raw[field]
+// Per-field ERP value for a row — read directly from the paired ERP line's
+// own values (see MigrationRow.erpValues), never inferred/guessed. 'new'
+// rows and rows with no paired line (missing from ERP, or excluded by
+// department/HQ scope) have no ERP value for any field.
+function erpValueFor(r: MigrationRow, field: string): number | null | undefined {
+  if (r.state === 'new' || !r.erpValues) return undefined
+  return r.erpValues[field as ValueField]
 }
 
 /**
@@ -81,7 +80,7 @@ function erpAggregateValueFor(
   if (r.state === 'new' || !r.resolved.distributor || !r.resolved.item) return undefined
   const doc = erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date))
   if (!doc) return undefined
-  const line = findErpLine(doc, r.resolved.item)
+  const line = findErpLine(doc, r.resolved.item, { department: r.resolved.department, hq: r.resolved.erpHq })
   return line ? line[field as (typeof VALUE_FIELDS)[number]] : undefined
 }
 
@@ -291,14 +290,26 @@ export function SecondaryPage() {
   }
 
   // Only the flat row view needs virtualization — grouped views are bounded
-  // by distinct stockist/item count, far smaller than raw row count.
+  // by distinct stockist/item count, far smaller than raw row count. The
+  // table scrolls with the page (no internal scrollbar), so virtualization
+  // tracks window scroll instead of an inner div — scrollMargin offsets the
+  // virtualizer's coordinate space by how far the table sits from the top
+  // of the document.
   const tableScrollRef = useRef<HTMLDivElement>(null)
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's returned functions are intentionally unmemoized
-  const rowVirtualizer = useVirtualizer({
+  const [scrollMargin, setScrollMargin] = useState(0)
+  useEffect(() => {
+    const measure = () => {
+      if (tableScrollRef.current) setScrollMargin(tableScrollRef.current.getBoundingClientRect().top + window.scrollY)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [groupedVisible, filter])
+  const rowVirtualizer = useWindowVirtualizer({
     count: groupedVisible ? 0 : visible.length,
-    getScrollElement: () => tableScrollRef.current,
     estimateSize: () => 40,
     overscan: 12,
+    scrollMargin,
   })
 
   const detailRow = rows.find((r) => r.id === detailRowId) ?? null
@@ -494,7 +505,9 @@ export function SecondaryPage() {
       ecubixSalesQty += r.values.sales_qty ?? 0
       ecubixClosingQty += r.values.closing_qty ?? 0
       const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
-      const line = doc && r.resolved.item ? findErpLine(doc, r.resolved.item) : undefined
+      const line = doc && r.resolved.item
+        ? findErpLine(doc, r.resolved.item, { department: r.resolved.department, hq: r.resolved.erpHq })
+        : undefined
       if (line) {
         if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
         const erpKey = `${r.resolved.distributor}|${r.resolved.date}|${r.resolved.item}`
@@ -1124,7 +1137,7 @@ export function SecondaryPage() {
         </div>
       )}
       <Card>
-        <div ref={tableScrollRef} className="table-scroll max-h-[70vh] overflow-y-auto [&_.table-data]:min-w-0">
+        <div ref={tableScrollRef} className="table-scroll [&_.table-data]:min-w-0">
           <table className="table-data">
             <thead>
               {groupedVisible ? (

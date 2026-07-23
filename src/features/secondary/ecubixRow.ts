@@ -41,6 +41,7 @@ export function buildMigrationRowFromRaw(
     state: 'new',
     issues: [],
     diff: [],
+    erpValues: null,
     erpDocName: null,
     resolution: null,
     push: { attempts: 0, lastError: null, lastAt: null },

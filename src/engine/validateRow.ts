@@ -16,6 +16,32 @@ function norm(s: string): string {
   return s.trim().toLowerCase()
 }
 
+function normHq(hq: string | null | undefined): string {
+  return norm(hq || '').replace(/^hq-/, '')
+}
+
+/**
+ * A distributor's document can carry item lines for more than one
+ * department/HQ (beat) — e.g. two sales reps on different role profiles
+ * both selling to the same distributor on the same date. A batch is scoped
+ * to one department+HQ, so lines belonging to a different one must never be
+ * pulled into this batch's comparison, even if the item name matches.
+ */
+export interface ErpLineScope {
+  department?: string | null
+  hq?: string | null
+}
+
+// Excludes a line only when it has an explicit, differing department/HQ tag
+// — an untagged line (no custom_department/custom_hq at all, e.g. older
+// docs or test fixtures) is treated as scope-agnostic rather than assumed
+// to belong to a different beat.
+function matchesScope(item: ErpSecondaryItem, scope?: ErpLineScope): boolean {
+  if (scope?.department && item.custom_department && norm(item.custom_department) !== norm(scope.department)) return false
+  if (scope?.hq && item.custom_hq && normHq(item.custom_hq) !== normHq(scope.hq)) return false
+  return true
+}
+
 /**
  * ERP itself sometimes carries more than one item line for the same item on
  * one doc (e.g. two "CARTITAB C2" lines, each a separate real transaction).
@@ -27,14 +53,17 @@ function norm(s: string): string {
  * Ecubix rows that each cleanly correspond to their own ERP line don't both
  * get falsely diffed against the other's combined total. Only falls back to
  * the summed line when no exact per-row pairing exists (a genuine mismatch).
+ * `scope` restricts matches to lines tagged for this batch's own
+ * department/HQ — see ErpLineScope.
  */
 export function findErpLine(
   doc: ErpSecondaryDoc,
   itemName: string,
+  scope?: ErpLineScope,
   ecubixValues?: Partial<Record<(typeof VALUE_FIELDS)[number], number | null>>,
 ): ErpSecondaryItem | undefined {
   const target = normalizeItemName(itemName)
-  const matches = doc.items.filter((i) => normalizeItemName(i.item) === target)
+  const matches = doc.items.filter((i) => normalizeItemName(i.item) === target && matchesScope(i, scope))
   if (matches.length <= 1) return matches[0]
   if (ecubixValues) {
     const exact = matches.find((m) => VALUE_FIELDS.every((f) => numbersEqual(ecubixValues[f] ?? null, m[f])))
@@ -62,13 +91,14 @@ export function findErpLine(
 function resolveErpLine(
   doc: ErpSecondaryDoc,
   itemName: string,
+  scope: ErpLineScope,
   ecubixValues: Partial<Record<ValueField, number | null>>,
   pool: Map<string, ErpSecondaryItem[]>,
 ): ErpSecondaryItem | undefined {
   const target = normalizeItemName(itemName)
-  const poolKey = `${doc.name}::${target}`
+  const poolKey = `${doc.name}::${target}::${norm(scope.department || '')}::${normHq(scope.hq)}`
   if (!pool.has(poolKey)) {
-    pool.set(poolKey, doc.items.filter((i) => normalizeItemName(i.item) === target))
+    pool.set(poolKey, doc.items.filter((i) => normalizeItemName(i.item) === target && matchesScope(i, scope)))
   }
   const available = pool.get(poolKey)!
   if (available.length === 0) return undefined
@@ -198,30 +228,41 @@ function numbersEqual(a: number | null, b: number | null): boolean {
   return Math.abs(a - b) <= CURRENCY_TOLERANCE
 }
 
+export interface RowDiffResult {
+  diffs: FieldDiff[]
+  /** The paired ERP line's own field values — null when no line was found at all (see MigrationRow.erpValues). */
+  erpValues: Partial<Record<ValueField, number | null>> | null
+}
+
 /**
  * Field-level diff between an Ecubix row's values and its paired ERP item
  * line. `pool` (see ValidationContext.erpLinePool) should be shared across
  * one whole validation pass so items with multiple lines pair each Ecubix
  * row to its own distinct line instead of every row comparing against the
- * same one; omit it only for an isolated single-row call.
+ * same one; omit it only for an isolated single-row call. Returns the
+ * paired line's own values alongside the diff so callers never have to
+ * infer a matched field's ERP value by assuming it equals the Ecubix one.
  */
 export function diffRow(
   row: MigrationRow,
   erpDoc: ErpSecondaryDoc,
   pool: Map<string, ErpSecondaryItem[]> = new Map(),
-): FieldDiff[] {
-  const erpLine = row.resolved.item ? resolveErpLine(erpDoc, row.resolved.item, row.values, pool) : undefined
+): RowDiffResult {
+  const scope: ErpLineScope = { department: row.resolved.department, hq: row.resolved.erpHq }
+  const erpLine = row.resolved.item ? resolveErpLine(erpDoc, row.resolved.item, scope, row.values, pool) : undefined
   if (!erpLine) {
     // Doc exists but this item line doesn't → everything Ecubix-side is "new in doc"
-    return [{ field: 'item', ecubix: row.resolved.item, erp: null }]
+    return { diffs: [{ field: 'item', ecubix: row.resolved.item, erp: null }], erpValues: null }
   }
   const diffs: FieldDiff[] = []
+  const erpValues: Partial<Record<ValueField, number | null>> = {}
   for (const f of VALUE_FIELDS) {
+    erpValues[f] = erpLine[f]
     if (!numbersEqual(row.values[f], erpLine[f])) {
       diffs.push({ field: f, ecubix: row.values[f], erp: erpLine[f] })
     }
   }
-  return diffs
+  return { diffs, erpValues }
 }
 
 /**
@@ -367,6 +408,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
   const hasErrors = issues.some((i) => i.severity === 'error')
   let state: RowState
   let diff: FieldDiff[] = row.diff
+  let erpValues = row.erpValues
   let erpDocName = row.erpDocName
 
   if (hasErrors) {
@@ -376,6 +418,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     state = row.state === 'error' ? 'new' : row.state
   } else {
     diff = []
+    erpValues = null
     const key = groupKey(distributor!, row.resolved.date)
     const existing = ctx.erpExisting.get(key)
     if (!existing) {
@@ -383,7 +426,9 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
       erpDocName = null
     } else {
       erpDocName = existing.name
-      diff = diffRow({ ...row, resolved }, existing, ctx.erpLinePool)
+      const result = diffRow({ ...row, resolved }, existing, ctx.erpLinePool)
+      diff = result.diffs
+      erpValues = result.erpValues
       if (diff.length === 0) {
         // Already in ERP and identical → nothing to push
         state = row.state === 'synced' ? 'synced' : 'matched'
@@ -396,7 +441,7 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     }
   }
 
-  return { ...row, resolved, state, issues, diff, erpDocName }
+  return { ...row, resolved, state, issues, diff, erpValues, erpDocName }
 }
 
 /** Recompute batch counts from rows. */

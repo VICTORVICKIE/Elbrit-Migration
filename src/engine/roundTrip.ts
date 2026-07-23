@@ -30,7 +30,7 @@ export function roundTripCompare(
           mismatches: [{ field: 'document', ecubix: row.erpDocName, erp: null }],
         }
       }
-      const mismatches = diffRow(row, doc, pool)
-      return { rowId: row.id, ok: mismatches.length === 0, mismatches }
+      const { diffs } = diffRow(row, doc, pool)
+      return { rowId: row.id, ok: diffs.length === 0, mismatches: diffs }
     })
 }

@@ -617,7 +617,7 @@ export function EcubixBrowser() {
 
   /** Department → HQ breakdown of Ecubix/ERP values (or qty), for the reconciliation drill-down — only leaves already checked. */
   function valueBreakdown(field: ValueCardKey) {
-    const groups = new Map<string, { hq: string; ecubix: number; erp: number }[]>()
+    const groups = new Map<string, { hq: string; rawHq: string; month: string; ecubix: number; erp: number }[]>()
     for (const l of filteredComputed) {
       const r = reconciliation.get(reconciliationKey(l))!
       const ecubix =
@@ -637,7 +637,7 @@ export function EcubixBrowser() {
               ? r.erpClosingValue
               : r.erpClosingQty
       const rows = groups.get(l.department) ?? []
-      rows.push({ hq: l.hq.replace(/^HQ-/i, ''), ecubix, erp: erpVal })
+      rows.push({ hq: l.hq.replace(/^HQ-/i, ''), rawHq: l.hq, month: l.month, ecubix, erp: erpVal })
       groups.set(l.department, rows)
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
@@ -963,6 +963,8 @@ export function EcubixBrowser() {
                   : { ecubix: scopeReconciliation.ecubixClosingQty, erp: scopeReconciliation.erpClosingQty }
           }
           groups={valueBreakdown(expandedValueCard)}
+          busyHq={busyHq}
+          onOpenHq={openHq}
           onClose={() => setExpandedValueCard(null)}
         />
       )}
@@ -1001,12 +1003,16 @@ function ValueBreakdownDialog({
   monthLabelText,
   total,
   groups,
+  busyHq,
+  onOpenHq,
   onClose,
 }: {
   field: ValueCardKey
   monthLabelText: string
   total: { ecubix: number; erp: number }
-  groups: [string, { hq: string; ecubix: number; erp: number }[]][]
+  groups: [string, { hq: string; rawHq: string; month: string; ecubix: number; erp: number }[]][]
+  busyHq: string | null
+  onOpenHq: (month: string, department: string, hq: string) => void
   onClose: () => void
 }) {
   const card = VALUE_CARDS.find((c) => c.key === field)!
@@ -1049,19 +1055,26 @@ function ValueBreakdownDialog({
                     <DiffCell ecubix={deptTotal.ecubix} erp={deptTotal.erp} format={format} />
                   </div>
                 </div>
-                {hqs.map((h) => (
-                  <div
-                    key={h.hq}
-                    className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center gap-2 border-b border-border py-2.5 pr-5 pl-9 text-[12.5px]"
-                  >
-                    <div className="truncate">{h.hq}</div>
-                    <div className="text-right font-mono tabular-nums">{format(h.ecubix)}</div>
-                    <div className="text-right font-mono tabular-nums">{format(h.erp)}</div>
-                    <div className="text-right">
-                      <DiffCell ecubix={h.ecubix} erp={h.erp} format={format} />
-                    </div>
-                  </div>
-                ))}
+                {hqs.map((h) => {
+                  const hk = hqKey(h.month, department, h.rawHq)
+                  const busy = busyHq === hk
+                  return (
+                    <button
+                      key={h.hq}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onOpenHq(h.month, department, h.rawHq)}
+                      className="grid w-full grid-cols-[1.6fr_1fr_1fr_1fr] items-center gap-2 border-b border-border py-2.5 pr-5 pl-9 text-left text-[12.5px] hover:bg-bg disabled:cursor-wait"
+                    >
+                      <div className="truncate">{busy ? 'Opening…' : h.hq}</div>
+                      <div className="text-right font-mono tabular-nums">{format(h.ecubix)}</div>
+                      <div className="text-right font-mono tabular-nums">{format(h.erp)}</div>
+                      <div className="text-right">
+                        <DiffCell ecubix={h.ecubix} erp={h.erp} format={format} />
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             )
           })}

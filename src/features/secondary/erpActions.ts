@@ -36,6 +36,24 @@ export interface StaticErpIndex {
  * and reuse across every leaf in a reconciliation batch instead of re-fetching
  * the whole Item/Customer list per HQ (see `computeReconciliation`).
  */
+/**
+ * `name` (Item Code) is ERPNext's primary key — always unique. `item_name`
+ * is a free-text label that isn't — multiple Item records (e.g. a real
+ * product and unrelated fee/charge lines cloned from it) can share the same
+ * item_name. Index codes first so they're authoritative, then only fill in
+ * item_name-based entries for keys no code already claims — a colliding
+ * item_name can never overwrite a correct code match.
+ */
+function buildItemIndex(itemDocs: { name: string; item_name: string }[]): Map<string, string> {
+  const items = new Map<string, string>()
+  for (const it of itemDocs) items.set(normalizeItemName(it.name), it.name)
+  for (const it of itemDocs) {
+    const key = normalizeItemName(it.item_name || it.name)
+    if (!items.has(key)) items.set(key, it.name)
+  }
+  return items
+}
+
 export async function fetchStaticErpIndex(client: ErpNextClient, ebsCodeErpFields: string[]): Promise<StaticErpIndex> {
   const customerFields = targetFieldsFrom(ebsCodeErpFields, ['name'])
   const [itemDocs, customerRecords] = await Promise.all([
@@ -43,11 +61,7 @@ export async function fetchStaticErpIndex(client: ErpNextClient, ebsCodeErpField
     fetchFieldValues(client, 'Customer', customerFields),
   ])
 
-  const items = new Map<string, string>()
-  for (const it of itemDocs) {
-    items.set(normalizeItemName(it.item_name || it.name), it.name)
-    items.set(normalizeItemName(it.name), it.name)
-  }
+  const items = buildItemIndex(itemDocs)
 
   const customers = new Map<string, string>()
   for (const r of customerRecords) {
@@ -110,11 +124,7 @@ export async function fetchReconciliationSnapshot(
     confirmed_distributors: JSON.stringify(confirmedDistributors),
   })
 
-  const items = new Map<string, string>()
-  for (const it of raw.items) {
-    items.set(normalizeItemName(it.item_name || it.name), it.name)
-    items.set(normalizeItemName(it.name), it.name)
-  }
+  const items = buildItemIndex(raw.items)
   const customers = new Map<string, string>()
   for (const r of raw.customerRecords) customers.set(normalizeItemName(r.value), r.name)
 

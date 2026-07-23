@@ -62,6 +62,15 @@ export interface MigrationRow {
   state: RowState
   issues: RowIssue[]
   diff: FieldDiff[]
+  /**
+   * The actual paired ERP line's own field values — populated whenever a
+   * line was found (matched or conflicting), `null` when none was (item
+   * missing from ERP / scoped out). `diff` only lists mismatches, so
+   * display code needing a field's real ERP value even when it matches
+   * must read this rather than falling back to the Ecubix value and
+   * assuming equality — the two can differ within CURRENCY_TOLERANCE.
+   */
+  erpValues: Partial<Record<ValueField, number | null>> | null
   erpDocName: string | null
   resolution: 'use-ecubix' | 'keep-erp' | null
   push: { attempts: number; lastError: string | null; lastAt: string | null }
