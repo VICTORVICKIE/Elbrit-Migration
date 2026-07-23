@@ -4,7 +4,7 @@
 import { buildDocPayload, buildPushGroups, type PushGroup } from '../../engine/buildPayload'
 import { roundTripCompare } from '../../engine/roundTrip'
 import { normalizeItemName } from '../../engine/resolveItem'
-import { groupKey, resolveRegexOverride } from '../../engine/validateRow'
+import { addExistingDoc, resolveRegexOverride } from '../../engine/validateRow'
 import { bestFuzzyMatch } from '../../lib/fuzzyMatch'
 import { ErpApiError, ErpNextClient } from '../../lib/erpnext/client'
 import type {
@@ -119,7 +119,7 @@ export async function fetchReconciliationSnapshot(
   for (const r of raw.customerRecords) customers.set(normalizeItemName(r.value), r.name)
 
   const existing = new Map<string, ErpSecondaryDoc>()
-  for (const doc of raw.existing) existing.set(groupKey(doc.distributor, doc.date), doc)
+  for (const doc of raw.existing) addExistingDoc(existing, doc)
 
   return { items, customers, existing, customerProfiles: new Map(Object.entries(raw.customerProfiles ?? {})) }
 }
@@ -181,7 +181,7 @@ export async function fetchErpSnapshot(
       limit: 500,
     })
     const docs = await Promise.all(names.map(({ name }) => client.getDoc<ErpSecondaryDoc>(DOCTYPE, name)))
-    for (const doc of docs) existing.set(groupKey(doc.distributor, doc.date), doc)
+    for (const doc of docs) addExistingDoc(existing, doc)
   }
 
   // ST-HQ mapping source: full Customer docs carry the custom_role_profile

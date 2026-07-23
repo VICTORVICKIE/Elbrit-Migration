@@ -7,9 +7,9 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useShallow } from 'zustand/react/shallow'
 import { StatusChip } from '../../components/StatusChip'
 import { buildMasterMap, useAppStore } from '../../data/appStore'
-import { normalizeItemName } from '../../engine/resolveItem'
-import { countRows, groupKey } from '../../engine/validateRow'
-import type { CustomerProfile, ItemDepartment, MigrationRow, RowState } from '../../types'
+import { countRows, findErpLine, groupKey } from '../../engine/validateRow'
+import type { CustomerProfile, ErpSecondaryDoc, ItemDepartment, MigrationRow, RowState } from '../../types'
+import { VALUE_FIELDS } from '../../types'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { Checkbox } from '../../ui/Checkbox'
@@ -62,6 +62,27 @@ function erpValueFor(r: MigrationRow, field: string): string | number | null | u
   const d = r.diff.find((d) => d.field === field)
   if (d) return d.erp
   return r.raw[field]
+}
+
+/**
+ * The *expected total* ERP value for an item — sums every ERP line sharing
+ * this item's normalized name on the matched doc (findErpLine with no
+ * ecubixValues), independent of which specific Ecubix row is asking. Used
+ * for group/aggregate totals, where r.diff isn't right: r.diff now pairs
+ * each row to its own best-matching ERP line (to avoid false conflicts when
+ * two Ecubix rows for one item cleanly correspond to two separate ERP
+ * lines), which reflects a single line, not the pooled total this displays.
+ */
+function erpAggregateValueFor(
+  r: MigrationRow,
+  field: string,
+  erpExisting: Map<string, ErpSecondaryDoc>,
+): number | null | undefined {
+  if (r.state === 'new' || !r.resolved.distributor || !r.resolved.item) return undefined
+  const doc = erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date))
+  if (!doc) return undefined
+  const line = findErpLine(doc, r.resolved.item)
+  return line ? line[field as (typeof VALUE_FIELDS)[number]] : undefined
 }
 
 function fmtCell(v: string | number | null | undefined): string {
@@ -177,6 +198,19 @@ export function SecondaryPage() {
       .catch((e) => setErpFetchError(e instanceof Error ? e.message : String(e)))
   }, [batch, rows, erpExisting.size, credentials, masterMap, secondaryConfig, setErpSnapshot])
 
+  // Rows persisted from an earlier session (or from before a validation-logic
+  // change, e.g. clubbing duplicate ERP item lines) carry whatever diff was
+  // computed back then. Once this batch's rows AND an ERP snapshot are both
+  // available — however they got loaded, cached-in-store or freshly fetched
+  // above — re-run validation once so the stored diff reflects current logic.
+  const revalidatedBatchRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!batch || rows.length === 0 || erpExisting.size === 0) return
+    if (revalidatedBatchRef.current === batch.id) return
+    revalidatedBatchRef.current = batch.id
+    void revalidate()
+  }, [batch, rows.length, erpExisting.size, revalidate])
+
   const visible = useMemo(
     () => (filter === 'all' ? rows : rows.filter((r) => r.state === filter)),
     [rows, filter],
@@ -229,7 +263,7 @@ export function SecondaryPage() {
         const v = r.raw[h.field]
         if (typeof v === 'number') g.sums[h.field] = (g.sums[h.field] ?? 0) + v
         if (!alreadyCountedErp) {
-          const erpV = erpValueFor(r, h.field)
+          const erpV = erpAggregateValueFor(r, h.field, erpExisting)
           if (typeof erpV === 'number') g.erpSums[h.field] = (g.erpSums[h.field] ?? 0) + erpV
         }
       }
@@ -239,7 +273,7 @@ export function SecondaryPage() {
       groups.set(key, g)
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [visible, viewMode, numericHeaderMap])
+  }, [visible, viewMode, numericHeaderMap, erpExisting])
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
@@ -460,9 +494,7 @@ export function SecondaryPage() {
       ecubixSalesQty += r.values.sales_qty ?? 0
       ecubixClosingQty += r.values.closing_qty ?? 0
       const doc = r.resolved.distributor ? erpExisting.get(groupKey(r.resolved.distributor, r.resolved.date)) : undefined
-      const line = doc && r.resolved.item
-        ? doc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(r.resolved.item!))
-        : undefined
+      const line = doc && r.resolved.item ? findErpLine(doc, r.resolved.item) : undefined
       if (line) {
         if (r.diff.length === 0) matchedEqualValue += r.values.sales_value ?? 0
         const erpKey = `${r.resolved.distributor}|${r.resolved.date}|${r.resolved.item}`
@@ -1225,90 +1257,66 @@ export function SecondaryPage() {
                       </tr>
                     )
                     if (!expanded) return [groupTr]
-                    const itemGroups = new Map<
-                      string,
-                      { itemName: string; sums: Record<string, number>; erpSums: Record<string, number>; states: Partial<Record<RowState, number>>; issueCount: number; rows: MigrationRow[] }
-                    >()
-                    for (const r of g.rows) {
-                      const key = normalizeItemName(r.itemName || '') || r.itemName || '—'
-                      const isFirstForItem = !itemGroups.has(key)
-                      const ig =
-                        itemGroups.get(key) ?? { itemName: r.itemName || '—', sums: {}, erpSums: {}, states: {}, issueCount: 0, rows: [] }
-                      for (const h of numericHeaderMap) {
-                        const v = r.raw[h.field]
-                        if (typeof v === 'number') ig.sums[h.field] = (ig.sums[h.field] ?? 0) + v
-                        // All rows sharing an item resolve to the same ERP item
-                        // line, so only take the ERP value from the first one —
-                        // summing it per row would multiply it by the row count.
-                        if (isFirstForItem) {
-                          const erpV = erpValueFor(r, h.field)
-                          if (typeof erpV === 'number') ig.erpSums[h.field] = erpV
-                        }
-                      }
-                      ig.states[r.state] = (ig.states[r.state] ?? 0) + 1
-                      ig.issueCount += r.issues.length > 0 ? r.issues.length : r.diff.length
-                      ig.rows.push(r)
-                      itemGroups.set(key, ig)
-                    }
-                    const detailRows = [...itemGroups.values()].map((ig) => {
-                      const r = ig.rows[0]
-                      const merged = ig.rows.length > 1
-                      return (
-                        <tr
-                          key={merged ? `${groupName}::${ig.itemName}` : r.id}
-                          className={cn('clickable', !merged && detailRowId === r.id && 'row-selected')}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDetailRowId(r.id === detailRowId ? null : r.id)
-                          }}
-                        >
-                          <td />
-                          <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
-                            {ig.itemName}
-                          </td>
-                          {numericHeaderMap.map((h) => (
+                    // One row per Ecubix row, sorted by item name for readability
+                    // — no merging: two Ecubix rows for the same item (e.g. two
+                    // separate ERP transactions) should each show their own
+                    // values and their own paired match/conflict state.
+                    const sortedRows = [...g.rows].sort((a, b) => (a.itemName || '').localeCompare(b.itemName || ''))
+                    const detailRows = sortedRows.map((r) => (
+                      <tr
+                        key={r.id}
+                        className={cn('clickable', detailRowId === r.id && 'row-selected')}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDetailRowId(r.id === detailRowId ? null : r.id)
+                        }}
+                      >
+                        <td />
+                        <td className="text-[12.5px] text-text-faint" style={{ paddingLeft: 20 }}>
+                          {r.itemName || '—'}
+                        </td>
+                        {numericHeaderMap.map((h) => {
+                          const v = r.raw[h.field]
+                          return (
                             <Fragment key={h.field}>
-                              <td className="border-l border-border text-[12.5px]">{fmt(ig.sums[h.field] ?? null)}</td>
+                              <td className="border-l border-border text-[12.5px]">
+                                {typeof v === 'number' ? fmt(v) : '—'}
+                              </td>
                               <td
                                 className={cn(
                                   'text-[12.5px] text-text-muted',
                                   h.field === 'closing_balance' && 'border-r border-border',
                                 )}
                               >
-                                {fmt(ig.erpSums[h.field] ?? null)}
+                                {fmtCell(erpValueFor(r, h.field))}
                               </td>
                             </Fragment>
-                          ))}
-                          <td className="text-[12.5px] text-text-faint">{merged ? ig.rows.length : ''}</td>
-                          <td>
-                            <span className="flex flex-wrap gap-1">
-                              {(Object.entries(ig.states) as [RowState, number][]).map(([state, n]) => (
-                                <span key={state} className="inline-flex items-center gap-1">
-                                  <StatusChip state={state} />
-                                  {merged && <Faint className="text-[11px]">×{n}</Faint>}
-                                </span>
-                              ))}
-                            </span>
+                          )
+                        })}
+                        <td className="text-[12.5px] text-text-faint" />
+                        <td>
+                          <StatusChip state={r.state} />
+                        </td>
+                        {prefs.issueHints && (
+                          <td className="max-w-70 text-xs">
+                            {r.issues.length > 0 ? (
+                              <OutlineChipButton
+                                className="!border-status-error !text-status-error"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setDetailRowId(r.id)
+                                }}
+                              >
+                                {issueLabel(r.issues[0].code)}
+                                {r.issues.length > 1 && <Faint>+{r.issues.length - 1}</Faint>}
+                              </OutlineChipButton>
+                            ) : r.diff.length > 0 ? (
+                              <span className="text-status-conflict">{r.diff.length} field(s) differ</span>
+                            ) : null}
                           </td>
-                          {prefs.issueHints && (
-                            <td className="max-w-70 text-xs">
-                              {ig.issueCount > 0 && (
-                                <OutlineChipButton
-                                  className="!border-status-error !text-status-error"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setDetailRowId(r.id)
-                                  }}
-                                >
-                                  {issueLabel(r.issues[0]?.code ?? ig.rows.find((x) => x.issues.length > 0)?.issues[0].code ?? '')}
-                                  {ig.issueCount > 1 && <Faint>+{ig.issueCount - 1}</Faint>}
-                                </OutlineChipButton>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      )
-                    })
+                        )}
+                      </tr>
+                    ))
                     return [groupTr, ...detailRows]
                   })
                 : (() => {

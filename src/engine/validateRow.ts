@@ -1,17 +1,95 @@
 import type {
   CustomerProfile,
   ErpSecondaryDoc,
+  ErpSecondaryItem,
   FieldDiff,
   MigrationRow,
   RegexMapEntry,
   RowIssue,
   RowState,
+  ValueField,
 } from '../types'
 import { VALUE_FIELDS } from '../types'
 import { normalizeItemName } from './resolveItem'
 
 function norm(s: string): string {
   return s.trim().toLowerCase()
+}
+
+/**
+ * ERP itself sometimes carries more than one item line for the same item on
+ * one doc (e.g. two "CARTITAB C2" lines, each a separate real transaction).
+ * For AGGREGATE totals (a whole item's expected quantity/value for this
+ * distributor+date), sum every matching line — pass no `ecubixValues`.
+ * For PER-ROW comparison (does *this* Ecubix row's own line exist in ERP),
+ * pass `ecubixValues`: if one of the matching lines is an exact value match
+ * for this specific row, pair with it instead of the pooled sum, so two
+ * Ecubix rows that each cleanly correspond to their own ERP line don't both
+ * get falsely diffed against the other's combined total. Only falls back to
+ * the summed line when no exact per-row pairing exists (a genuine mismatch).
+ */
+export function findErpLine(
+  doc: ErpSecondaryDoc,
+  itemName: string,
+  ecubixValues?: Partial<Record<(typeof VALUE_FIELDS)[number], number | null>>,
+): ErpSecondaryItem | undefined {
+  const target = normalizeItemName(itemName)
+  const matches = doc.items.filter((i) => normalizeItemName(i.item) === target)
+  if (matches.length <= 1) return matches[0]
+  if (ecubixValues) {
+    const exact = matches.find((m) => VALUE_FIELDS.every((f) => numbersEqual(ecubixValues[f] ?? null, m[f])))
+    if (exact) return exact
+  }
+  const merged: ErpSecondaryItem = { ...matches[0] }
+  for (const f of VALUE_FIELDS) {
+    const vals = matches.map((m) => m[f]).filter((v): v is number => typeof v === 'number')
+    merged[f] = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) : null
+  }
+  return merged
+}
+
+/**
+ * Per-row ERP-line pairing for diffRow: when an item has multiple ERP lines
+ * and multiple Ecubix rows this validation pass, each row should claim its
+ * own distinct line instead of every row comparing against the same pooled
+ * total — otherwise two Ecubix rows that individually reconcile perfectly
+ * (e.g. 60↔60, 15↔15) would both show as false conflicts against a merged
+ * 75. `pool` is shared and mutated across the whole pass (see
+ * ValidationContext.erpLinePool); a row that finds no unclaimed line left
+ * (more Ecubix rows for this item than ERP has lines) gets `undefined` —
+ * a genuine, real mismatch, not a bug.
+ */
+function resolveErpLine(
+  doc: ErpSecondaryDoc,
+  itemName: string,
+  ecubixValues: Partial<Record<ValueField, number | null>>,
+  pool: Map<string, ErpSecondaryItem[]>,
+): ErpSecondaryItem | undefined {
+  const target = normalizeItemName(itemName)
+  const poolKey = `${doc.name}::${target}`
+  if (!pool.has(poolKey)) {
+    pool.set(poolKey, doc.items.filter((i) => normalizeItemName(i.item) === target))
+  }
+  const available = pool.get(poolKey)!
+  if (available.length === 0) return undefined
+  if (available.length === 1) return available.splice(0, 1)[0]
+
+  let idx = available.findIndex((m) => VALUE_FIELDS.every((f) => numbersEqual(ecubixValues[f] ?? null, m[f])))
+  if (idx === -1) {
+    // No exact pairing — claim whichever remaining line is numerically
+    // closest, so a genuine partial mismatch still compares against the
+    // most plausible counterpart rather than an arbitrary one.
+    idx = 0
+    let bestDist = Infinity
+    available.forEach((m, i) => {
+      const dist = VALUE_FIELDS.reduce((acc, f) => acc + Math.abs((ecubixValues[f] ?? 0) - (m[f] ?? 0)), 0)
+      if (dist < bestDist) {
+        bestDist = dist
+        idx = i
+      }
+    })
+  }
+  return available.splice(idx, 1)[0]
 }
 
 /** Regex from user input can be malformed — never let a bad pattern break validation. */
@@ -81,6 +159,17 @@ export interface ValidationContext {
    * states (matched/conflict/synced) must be preserved, not recomputed.
    */
   hasErpSnapshot: boolean
+  /**
+   * Shared, mutable across one whole validation pass (one `rows.map(r =>
+   * validateRow(r, ctx))` call) — tracks which specific ERP item lines have
+   * already been paired to an Ecubix row this pass, so when an item has
+   * multiple lines (e.g. two "CARTITAB C2" transactions) and multiple Ecubix
+   * rows for it, each row pairs to its own distinct line instead of every
+   * row comparing against the same (or a pooled) value. Optional so
+   * existing callers/tests that validate a single row in isolation don't
+   * need updating — diffRow falls back to a fresh, unshared pool per call.
+   */
+  erpLinePool?: Map<string, ErpSecondaryItem[]>
 }
 
 export const CURRENCY_TOLERANCE = 0.01
@@ -89,17 +178,39 @@ export function groupKey(distributor: string, date: string): string {
   return `${distributor}|${date}`
 }
 
+/**
+ * ERP sometimes has more than one "Secondary Data Entry" doc for the same
+ * distributor+date (a duplicate-entry data issue on the ERP side) — building
+ * the existing-docs map by groupKey alone would silently keep only the last
+ * one seen and drop the other doc's item lines entirely. Concatenate items
+ * from every doc sharing a key instead, so findErpLine's item-name merge
+ * still sees every line, no matter which doc it came from.
+ */
+export function addExistingDoc(existing: Map<string, ErpSecondaryDoc>, doc: ErpSecondaryDoc): void {
+  const key = groupKey(doc.distributor, doc.date)
+  const prev = existing.get(key)
+  existing.set(key, prev ? { ...prev, items: [...prev.items, ...doc.items] } : doc)
+}
+
 function numbersEqual(a: number | null, b: number | null): boolean {
   if (a === null && b === null) return true
   if (a === null || b === null) return false
   return Math.abs(a - b) <= CURRENCY_TOLERANCE
 }
 
-/** Field-level diff between an Ecubix row's values and the matching ERP item line. */
-export function diffRow(row: MigrationRow, erpDoc: ErpSecondaryDoc): FieldDiff[] {
-  const erpLine = row.resolved.item
-    ? erpDoc.items.find((i) => normalizeItemName(i.item) === normalizeItemName(row.resolved.item!))
-    : undefined
+/**
+ * Field-level diff between an Ecubix row's values and its paired ERP item
+ * line. `pool` (see ValidationContext.erpLinePool) should be shared across
+ * one whole validation pass so items with multiple lines pair each Ecubix
+ * row to its own distinct line instead of every row comparing against the
+ * same one; omit it only for an isolated single-row call.
+ */
+export function diffRow(
+  row: MigrationRow,
+  erpDoc: ErpSecondaryDoc,
+  pool: Map<string, ErpSecondaryItem[]> = new Map(),
+): FieldDiff[] {
+  const erpLine = row.resolved.item ? resolveErpLine(erpDoc, row.resolved.item, row.values, pool) : undefined
   if (!erpLine) {
     // Doc exists but this item line doesn't → everything Ecubix-side is "new in doc"
     return [{ field: 'item', ecubix: row.resolved.item, erp: null }]
@@ -265,13 +376,14 @@ export function validateRow(row: MigrationRow, ctx: ValidationContext): Migratio
     state = row.state === 'error' ? 'new' : row.state
   } else {
     diff = []
-    const existing = ctx.erpExisting.get(groupKey(distributor!, row.resolved.date))
+    const key = groupKey(distributor!, row.resolved.date)
+    const existing = ctx.erpExisting.get(key)
     if (!existing) {
       state = 'new'
       erpDocName = null
     } else {
       erpDocName = existing.name
-      diff = diffRow({ ...row, resolved }, existing)
+      diff = diffRow({ ...row, resolved }, existing, ctx.erpLinePool)
       if (diff.length === 0) {
         // Already in ERP and identical → nothing to push
         state = row.state === 'synced' ? 'synced' : 'matched'

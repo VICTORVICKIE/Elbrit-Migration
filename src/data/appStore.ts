@@ -87,6 +87,7 @@ function validationCtx(
     batchHq,
     batchDepartment,
     hasErpSnapshot: s.erpItemsIndex.size > 0,
+    erpLinePool: new Map(),
   }
 }
 

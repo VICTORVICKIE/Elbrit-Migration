@@ -91,6 +91,7 @@ export async function openOrCreateEcubixBatch(month: string, department: string,
       batchHq: erpHq,
       batchDepartment: department,
       hasErpSnapshot: true,
+      erpLinePool: new Map(),
     }
     rows = rows.map((r) => validateRow(r, ctx))
   }
